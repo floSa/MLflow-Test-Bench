@@ -1,0 +1,42 @@
+# Ignorer le fichier .env contenant les secrets
+.env
+
+# Données persistantes (gérées par Docker volumes)
+data/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+eggs/
+.eggs/
+
+# Environnements virtuels
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# MLflow local (si utilisé en dev)
+mlruns/
+mlartifacts/

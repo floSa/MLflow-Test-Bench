@@ -1,0 +1,150 @@
+# =========================================
+# Docker Compose - MLflow + MinIO + PostgreSQL
+# Tutoriel avec bonnes pratiques
+# =========================================
+
+services:
+  # -----------------------------------------
+  # PostgreSQL - Backend Store MLflow
+  # Stocke les métadonnées des expériences
+  # -----------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: mlflow-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -----------------------------------------
+  # MinIO - Artifact Store (S3 compatible)
+  # Stocke les modèles et artefacts
+  # -----------------------------------------
+  minio:
+    image: minio/minio:latest
+    container_name: mlflow-minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "9000:9000" # API S3
+      - "9001:9001" # Console Web
+    volumes:
+      - minio_data:/data
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: [ "CMD", "mc", "ready", "local" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  # -----------------------------------------
+  # MinIO Client - Création automatique du bucket
+  # -----------------------------------------
+  minio-setup:
+    image: minio/mc:latest
+    container_name: mlflow-minio-setup
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c " mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; mc mb myminio/${MINIO_BUCKET} --ignore-existing; mc anonymous set download myminio/${MINIO_BUCKET}; exit 0; "
+    networks:
+      - mlflow-network
+
+  # -----------------------------------------
+  # Runner - Exécution des exemples Python
+  # Environnement isolé avec venv
+  # -----------------------------------------
+  runner:
+    build:
+      context: ./examples
+      dockerfile: Dockerfile
+    container_name: mlflow-runner
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      # Configuration MLflow (accès via le réseau Docker)
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      # Configuration S3 pour MinIO (artefacts)
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+    volumes:
+      # Montage des exemples pour développement live
+      # Note: pas de :ro pour permettre la création de fichiers temporaires (artefacts)
+      - ./examples:/app
+    networks:
+      - mlflow-network
+    # Garde le conteneur actif pour exécution interactive
+    stdin_open: true
+    tty: true
+    # Lancer le script d'exemple au démarrage puis attendre
+    command: sh -c "python sklearn_example.py && tail -f /dev/null"
+
+  # -----------------------------------------
+  # MLflow Tracking Server
+  # Interface principale pour le ML tracking
+  # -----------------------------------------
+  mlflow:
+    build:
+      context: ./mlflow
+      dockerfile: Dockerfile
+    container_name: mlflow-server
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-setup:
+        condition: service_completed_successfully
+    environment:
+      # Configuration du backend store (PostgreSQL)
+      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      # Configuration de l'artifact store (MinIO/S3)
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      MLFLOW_ARTIFACT_ROOT: s3://${MINIO_BUCKET}/
+    ports:
+      - "5000:5000"
+    networks:
+      - mlflow-network
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:5000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+
+# -----------------------------------------
+# Volumes persistants
+# -----------------------------------------
+volumes:
+  postgres_data:
+    name: mlflow-postgres-data
+  minio_data:
+    name: mlflow-minio-data
+
+# -----------------------------------------
+# Réseau isolé
+# -----------------------------------------
+networks:
+  mlflow-network:
+    name: mlflow-network
+    driver: bridge

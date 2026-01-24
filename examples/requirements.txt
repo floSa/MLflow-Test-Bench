@@ -1,0 +1,19 @@
+# Dépendances pour les exemples MLflow
+# =====================================
+
+# MLflow client
+mlflow==2.19.0
+
+# Machine Learning
+scikit-learn>=1.4.0
+pandas>=2.0.0
+numpy>=1.24.0
+
+# Visualisation
+matplotlib>=3.7.0
+
+# Connexion S3 (MinIO)
+boto3>=1.28.0
+
+# Utilitaires
+python-dotenv>=1.0.0
