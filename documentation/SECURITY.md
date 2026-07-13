@@ -1,7 +1,7 @@
 # Sécurité — MLflow + Docker (tutoriel)
 
 > Ce projet est un **environnement de tutoriel local**. La posture ci-dessous
-> décrit ce qui est réellement en place dans le code, et signale ⚠️ les points à
+> décrit ce qui est réellement en place dans le code, et signale les points à
 > durcir avant tout usage exposé ou en production.
 
 ---
@@ -24,8 +24,8 @@ services `mlflow` et `runner` réutilisent `MINIO_ROOT_USER` / `MINIO_ROOT_PASSW
 comme `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`. Un même secret couvre donc
 l'admin MinIO **et** l'accès aux artefacts.
 
-> ⚠️ `.env` ne doit **jamais** être committé. Il est déjà couvert par `.gitignore`,
-> mais vérifiez-le après un clone ou un copier-coller Windows → WSL.
+> **Attention** : `.env` ne doit **jamais** être committé. Il est déjà couvert par
+> `.gitignore`, mais vérifiez-le après un clone ou un copier-coller Windows → WSL.
 
 ---
 
@@ -45,9 +45,9 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 Le backend PostgreSQL n'est donc **pas** joignable depuis la machine hôte, ce qui
 réduit la surface d'attaque.
 
-> ⚠️ Ni l'UI MLflow (`:5000`) ni la console MinIO (`:9001`) n'ont d'authentification
-> applicative ou de TLS dans cette configuration. Acceptable en local ; à placer
-> derrière un reverse-proxy authentifié + HTTPS si exposé au réseau.
+> **Attention** : ni l'UI MLflow (`:5000`) ni la console MinIO (`:9001`) n'ont
+> d'authentification applicative ou de TLS dans cette configuration. Acceptable en
+> local ; à placer derrière un reverse-proxy authentifié + HTTPS si exposé au réseau.
 
 ---
 
@@ -102,16 +102,16 @@ La persistance repose sur deux volumes Docker nommés :
 
 Honnêteté : ce projet est un tutoriel local, plusieurs points ne sont pas durcis.
 
-- ⚠️ **Bucket d'artefacts en lecture anonyme** — le conteneur `minio-setup` exécute
+- **Bucket d'artefacts en lecture anonyme** — le conteneur `minio-setup` exécute
   `mc anonymous set download myminio/${MINIO_BUCKET}`, ce qui rend le bucket
   `mlflow-artifacts` **lisible sans authentification** (source :
   `docker-compose.yml`). Pratique pour explorer les artefacts en local ; à retirer
   pour tout déploiement, car cela expose modèles et figures.
-- ⚠️ **Pas d'authentification sur l'UI MLflow** — quiconque atteint `:5000` peut
+- **Pas d'authentification sur l'UI MLflow** — quiconque atteint `:5000` peut
   lire/modifier les expériences et le registry. Prévoir un proxy authentifié en prod.
-- ⚠️ **Secrets partagés** — les credentials MinIO servent à la fois d'admin objet et
+- **Secrets partagés** — les credentials MinIO servent à la fois d'admin objet et
   de clés S3 applicatives. Séparer les rôles (clé applicative dédiée) en prod.
-- ⚠️ **Tags d'images `latest`** — `minio/minio:latest` et `minio/mc:latest` ne sont
+- **Tags d'images `latest`** — `minio/minio:latest` et `minio/mc:latest` ne sont
   pas reproductibles ; figer des versions précises pour un usage sérieux.
-- ⚠️ **Pas de TLS** — tout le trafic (UI, S3, Postgres) est en clair sur le réseau
+- **Pas de TLS** — tout le trafic (UI, S3, Postgres) est en clair sur le réseau
   Docker et l'hôte.
