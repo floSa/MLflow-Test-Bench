@@ -1,10 +1,10 @@
-# 📚 Tutoriel MLflow avec Docker
+# Tutoriel MLflow avec Docker
 
 > **Guide complet pour maîtriser le tracking d'expériences ML avec MLflow**
 
 ---
 
-## 📋 Table des matières
+## Table des matières
 
 8. [Introduction](#-introduction)
 9. [Architecture détaillée](#-architecture-détaillée)
@@ -16,7 +16,7 @@
 
 ---
 
-## 🎯 Introduction
+## Introduction
 
 ### Qu'est-ce que MLflow ?
 
@@ -90,7 +90,7 @@ On aurait pu utiliser une image prête à l'emploi comme `bitnami/mlflow` ou `gh
 
 ---
 
-## ⚙️ Prérequis
+## Prérequis
 
 ### Logiciels requis
 
@@ -127,7 +127,7 @@ On aurait pu utiliser une image prête à l'emploi comme `bitnami/mlflow` ou `gh
 
 ---
 
-## 📖 Concepts clés de MLflow
+## Concepts clés de MLflow
 
 ### 1. Expérience (Experiment)
 
@@ -197,7 +197,7 @@ mlflow.sklearn.log_model(model, "model")
 
 ---
 
-## 🛠️ Guide pratique
+## Guide pratique
 
 ### Exemple 1 : Logging basique
 
@@ -273,11 +273,11 @@ dataset = mlflow.data.from_pandas(
 mlflow.log_input(dataset, context="training")
 ```
 
-> **💡 Résultat** : Le dataset apparaîtra dans l'onglet "Overview" du run dans l'interface MLflow.
+> **Résultat** : Le dataset apparaîtra dans l'onglet "Overview" du run dans l'interface MLflow.
 
 ---
 
-## 🏭 Model Registry et Mise en Production
+## Model Registry et Mise en Production
 
 ### Qu'est-ce que le Model Registry ?
 
@@ -372,7 +372,7 @@ predictions = model.predict(X_new)
 
 ---
 
-## 📊 Comparaison des Runs dans MLflow
+## Comparaison des Runs dans MLflow
 
 ### Utilisation de l'onglet "Compare"
 
@@ -385,7 +385,7 @@ predictions = model.predict(X_new)
 
 
 
-## 🔧 Troubleshooting
+## Troubleshooting
 
 ### Problème : "Connection refused" sur port 5000
 
@@ -456,7 +456,7 @@ docker compose up -d --build
 
 ---
 
-## 📚 Ressources supplémentaires
+## Ressources supplémentaires
 
 - [Documentation officielle MLflow](https://mlflow.org/docs/latest/index.html)
 - [MLflow GitHub](https://github.com/mlflow/mlflow)
