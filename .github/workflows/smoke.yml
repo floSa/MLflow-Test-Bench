@@ -23,6 +23,7 @@ jobs:
           docker compose exec -T runner python basic_example.py
           docker compose exec -T runner python autolog_example.py
           docker compose exec -T runner python dataset_example.py
+          docker compose exec -T runner python evaluation_example.py
 
       - name: Vérifier la lecture d'un artefact par le serveur
         run: |

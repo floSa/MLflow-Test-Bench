@@ -189,6 +189,8 @@ protobuf==7.36.2
     #   mlflow-skinny
     #   mlflow-tracing
     #   opentelemetry-proto
+psutil==7.2.2
+    # via -r requirements.txt
 pyarrow==25.0.1
     # via mlflow
 pyasn1==0.6.5

@@ -13,6 +13,9 @@ scikit-learn>=1.6.0,<=1.9.1
 pandas>=2.0.0
 numpy>=1.24.0
 
+# Mesures système pendant les runs (CPU, mémoire)
+psutil>=5.9.0
+
 # Visualisation
 matplotlib>=3.7.0
 
