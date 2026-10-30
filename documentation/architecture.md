@@ -35,12 +35,12 @@ Versions lues dans le projet (`mlflow/Dockerfile`, `examples/requirements.txt`,
 
 | Couche | Technologie | Version |
 |---|---|---|
-| Serveur de tracking | MLflow | 2.19.0 |
+| Serveur de tracking | MLflow | 2.19.0 (avec SQLAlchemy < 2.1) |
 | Runtime des images | Python | 3.11-slim |
 | Backend store | PostgreSQL | 15-alpine |
 | Artifact store | MinIO | `latest` *(non épinglé)* |
 | Client bucket | MinIO Client (`mc`) | `latest` *(non épinglé)* |
-| ML & données (exemples) | scikit-learn / pandas / numpy | >= 1.4 / >= 2.0 / >= 1.24 |
+| ML & données (exemples) | scikit-learn / pandas / numpy | >= 1.4 et <= 1.5.2 / >= 2.0 / >= 1.24 |
 | Visualisation (exemples) | matplotlib | >= 3.7 |
 | Client S3 | boto3 | >= 1.28 |
 
@@ -54,22 +54,28 @@ Parcours d'un entraînement lancé depuis le `runner` :
    `MLFLOW_TRACKING_URI=http://mlflow:5000` (réseau Docker).
 2. Le client MLflow envoie les **métadonnées** (params, métriques, tags) au serveur
    `mlflow`, qui les persiste dans **PostgreSQL**.
-3. Les **artefacts** (modèle, figures) transitent par le serveur MLflow
-   (`--serve-artifacts`) et sont stockés dans le bucket **MinIO** `mlflow-artifacts`.
-4. L'utilisateur consulte les runs via l'**UI MLflow** sur `http://localhost:5000`.
+3. Les **artefacts** (modèle, figures) partent directement du `runner` vers le bucket
+   **MinIO** `mlflow-artifacts`. Le serveur étant lancé avec une racine explicite en
+   `s3://`, `--serve-artifacts` ne les fait pas passer par lui, d'où les identifiants S3
+   dans l'environnement du `runner`.
+4. L'utilisateur consulte les runs via l'**UI MLflow** sur `http://localhost:5000` ; le
+   serveur lit les artefacts dans MinIO pour les afficher.
 
 ```mermaid
 flowchart TD
   user[Utilisateur] -->|Navigateur| ui[MLflow UI :5000]
   subgraph reseau["Réseau Docker mlflow-network"]
     runner[Runner] -->|params / métriques| server[MLflow Server :5000]
-    runner -->|artefacts| server
+    runner -->|artefacts S3| minio[(MinIO :9000)]
     server -->|métadonnées| db[(PostgreSQL :5432)]
-    server -->|artefacts S3| minio[(MinIO :9000)]
+    server -->|lecture des artefacts| minio
     setup[minio-setup] -. crée le bucket .-> minio
   end
   ui --- server
 ```
+
+Séquence détaillée d'un appel, et correspondance entre appels Python et interface :
+[TUTORIAL.md](../TUTORIAL.md#de-la-commande-à-linterface).
 
 ---
 
@@ -91,10 +97,10 @@ Les deux stores sont des volumes Docker **nommés** : les données survivent à
 
 ## 6. Décisions d'architecture
 
-- **Dockerfile MLflow custom** *plutôt que* image tierce (`bitnami/mlflow`,
-  `ghcr.io/mlflow/mlflow`), *parce que* le tutoriel vise la maîtrise complète du
-  contenu (versions épinglées, user non-root, entrypoint, healthcheck) et une image
-  plus légère (build multi-stage). *Limite* : maintenance manuelle des dépendances ;
+- **Dockerfile MLflow custom** *plutôt que* image tierce
+  (`ghcr.io/mlflow/mlflow`), *parce que* le tutoriel vise la maîtrise complète du
+  contenu (versions épinglées, user non-root, entrypoint, healthcheck). *Limite* :
+  maintenance manuelle des dépendances ;
   en production une image maintenue peut suffire.
 - **Backend PostgreSQL** *plutôt que* store fichier local, *parce que* les métadonnées
   y gagnent en intégrité et en performances de requête. *Limite* : un service de plus à

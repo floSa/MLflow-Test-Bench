@@ -45,9 +45,10 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 Le backend PostgreSQL n'est donc **pas** joignable depuis la machine hôte, ce qui
 réduit la surface d'attaque.
 
-> **Attention** : ni l'UI MLflow (`:5000`) ni la console MinIO (`:9001`) n'ont
-> d'authentification applicative ou de TLS dans cette configuration. Acceptable en
-> local ; à placer derrière un reverse-proxy authentifié + HTTPS si exposé au réseau.
+> **Attention** : l'UI MLflow (`:5000`) n'a aucune authentification. La console MinIO
+> (`:9001`) demande les identifiants `MINIO_ROOT_USER` / `MINIO_ROOT_PASSWORD`, mais
+> sans TLS. Acceptable en local ; à placer derrière un reverse-proxy authentifié + HTTPS
+> si exposé au réseau.
 
 ---
 

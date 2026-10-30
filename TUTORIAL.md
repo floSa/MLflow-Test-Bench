@@ -6,13 +6,16 @@
 
 ## Table des matières
 
-8. [Introduction](#-introduction)
-9. [Architecture détaillée](#-architecture-détaillée)
-10. [Prérequis](#-prérequis)
-11. [Concepts clés](#-concepts-clés-de-mlflow)
-12. [Guide pratique](#-guide-pratique)
-13. [Bonnes pratiques](#-bonnes-pratiques)
-14. [Troubleshooting](#-troubleshooting)
+1. [Introduction](#introduction)
+2. [Architecture détaillée](#architecture-détaillée)
+3. [Prérequis](#prérequis)
+4. [Concepts clés](#concepts-clés-de-mlflow)
+5. [Guide pratique](#guide-pratique)
+6. [De la commande à l'interface](#de-la-commande-à-linterface)
+7. [Model Registry](#model-registry)
+8. [Comparaison des runs](#comparaison-des-runs-dans-mlflow)
+9. [Troubleshooting](#troubleshooting)
+10. [Ressources supplémentaires](#ressources-supplémentaires)
 
 ---
 
@@ -25,7 +28,7 @@
 | Problème | Solution MLflow |
 |----------|-----------------|
 | "Quels hyperparamètres ai-je utilisé ?" | **Tracking** - Enregistrement automatique |
-| "Quel modèle était le meilleur ?" | **Projects** - Comparaison des runs |
+| "Quel modèle était le meilleur ?" | **Tracking** - Comparaison des runs |
 | "Comment déployer mon modèle ?" | **Models** - Format standardisé |
 | "Quelle version est en production ?" | **Registry** - Gestion des versions |
 
@@ -73,20 +76,17 @@ Environnement d'exécution isolé contenant Python et les librairies nécessaire
 - *Rôle* : Exécuter vos scripts d'entraînement.
 - *Pourquoi ?* Garantit que le code tourne exactement de la même manière pour tout le monde, indépendamment de votre machine hôte (plus de "ça marche sur ma machine").
 
-#### Pourquoi un Dockerfile custom au lieu de `bitnami/mlflow` ?
+#### Pourquoi un Dockerfile custom au lieu d'une image tierce ?
 
-On aurait pu utiliser une image prête à l'emploi comme `bitnami/mlflow` ou `ghcr.io/mlflow/mlflow`. Voici pourquoi on a choisi de construire notre propre image :
+On aurait pu partir d'une image prête à l'emploi comme `ghcr.io/mlflow/mlflow`. Construire la nôtre a deux intérêts ici :
 
-| Critère | Image tierce (Bitnami) | Dockerfile custom |
-|---------|------------------------|-------------------|
-| **Contrôle** | Versions fixées par le mainteneur | Vous choisissez exactement chaque lib |
-| **Taille** | ~500 MB+ | ~300 MB (multi-stage) |
-| **Sécurité** | Dépendances inconnues | Audit complet du contenu |
-| **Apprentissage** | Boîte noire | Vous comprenez chaque étape |
-| **Personnalisation** | Limitée | Totale (entrypoint, user, healthcheck) |
+- **Contrôle** : on choisit chaque dépendance, dont le driver PostgreSQL (`psycopg2-binary`) et le client S3 (`boto3`) dont ce projet a besoin.
+- **Apprentissage** : chaque étape est lisible (build multi-stage, utilisateur non-root, entrypoint, healthcheck).
+
+Le coût : les mises à jour sont à notre charge. L'image finale pèse environ 1 Go.
 
 > [!TIP]
-> **En production**, vous pouvez très bien utiliser `bitnami/mlflow` pour démarrer rapidement. Le Dockerfile custom de ce tutoriel est avant tout **pédagogique**.
+> **En production**, une image maintenue permet de démarrer plus vite, après avoir vérifié qu'elle embarque le driver PostgreSQL et `boto3`. Le Dockerfile custom de ce tutoriel est avant tout **pédagogique**.
 
 ---
 
@@ -105,25 +105,37 @@ On aurait pu utiliser une image prête à l'emploi comme `bitnami/mlflow` ou `gh
 
 ### Démarrage du projet
 
-1. **Lancer les services** :
+1. **Créer la configuration** :
+   ```bash
+   cp .env.example .env
+   ```
+   Puis remplacez les valeurs `CHANGEZ_MOI_EN_PRODUCTION` dans `.env`.
+
+2. **Lancer les services** :
    ```bash
    docker compose up -d
    ```
 
-2. **Vérifier l'état** :
+3. **Vérifier l'état** :
    ```bash
    docker compose ps
    ```
-   Tous les services (`mlflow-server`, `mlflow-minio`, `mlflow-postgres`) doivent être `healthy`.
+   `mlflow-server`, `mlflow-minio` et `mlflow-postgres` doivent être `healthy`. `mlflow-runner` est `running`, sans état de santé. `mlflow-minio-setup` n'apparaît pas dans la liste : il s'arrête une fois le bucket créé.
 
-3. **Accéder à l'interface** :
+4. **Accéder à l'interface** :
    Ouvrez [http://localhost:5000](http://localhost:5000)
 
-4. **Lancer un entraînement** :
+5. **Regarder le premier entraînement** :
+   Le conteneur `runner` lance `sklearn_example.py` à son démarrage. Suivez-le avec :
    ```bash
-   # Exécute le script dans le conteneur 'runner'
-   docker compose exec runner python 02_sklearn_example.py
+   docker compose logs -f runner
    ```
+
+6. **Relancer un entraînement** :
+   ```bash
+   docker compose exec runner python sklearn_example.py
+   ```
+   Chaque exécution ajoute 4 runs et une nouvelle version du modèle `wine-classifier`.
 
 ---
 
@@ -187,8 +199,7 @@ Les **artefacts** sont des fichiers associés au run :
 # Logger un fichier générique (texte, json, etc)
 mlflow.log_artifact("config.yaml")
 
-# Logger une figure Matplotlib (recommandé pour les images)
-# Permet la visualisation native dans l'onglet "Images"
+# Logger une figure Matplotlib, visible dans l'onglet "Artifacts" du run
 mlflow.log_figure(fig, "confusion_matrix.png")
 
 # Logger un modèle scikit-learn
@@ -199,176 +210,194 @@ mlflow.sklearn.log_model(model, "model")
 
 ## Guide pratique
 
+Chaque exemple est un script de `examples/`, à lancer dans le conteneur `runner`.
+
 ### Exemple 1 : Logging basique
 
-```python
-import mlflow
+Script : [`examples/basic_example.py`](examples/basic_example.py)
 
-# Configuration
-mlflow.set_tracking_uri("http://localhost:5000")
+```bash
+docker compose exec runner python basic_example.py
+```
+
+```python
 mlflow.set_experiment("tutoriel-basique")
 
-with mlflow.start_run():
-    # 1. Paramètres
+with mlflow.start_run(run_name="premier-run") as run:
+    # Paramètres : les valeurs d'entrée, loggées une seule fois
     mlflow.log_param("algorithm", "random_forest")
     mlflow.log_param("n_estimators", 100)
-    
-    # 2. Entraînement (votre code)
-    accuracy = 0.92
-    
-    # 3. Métriques
-    mlflow.log_metric("accuracy", accuracy)
-    
-    # 4. Tags
-    mlflow.set_tag("auteur", "Florian")
+
+    # Métrique : plusieurs valeurs au fil des étapes (donne une courbe)
+    for step, loss in enumerate([0.9, 0.5, 0.3, 0.2, 0.15]):
+        mlflow.log_metric("loss", loss, step=step)
+    mlflow.log_metric("accuracy", 0.92)
+
+    # Tags : métadonnées libres, utiles pour filtrer
+    mlflow.set_tag("auteur", "tutoriel")
 ```
+
+Le terminal affiche le lien direct vers le run dans l'interface :
+
+```text
+🏃 View run premier-run at: http://mlflow:5000/#/experiments/<id>/runs/<run_id>
+Run terminé : <run_id>
+```
+
+> Ce lien utilise `mlflow:5000`, l'adresse du serveur dans le réseau Docker. Depuis votre navigateur, remplacez `mlflow` par `localhost`.
 
 ### Exemple 2 : Auto-logging avec scikit-learn
 
-MLflow peut automatiquement logger les paramètres et métriques pour certains frameworks :
+Script : [`examples/autolog_example.py`](examples/autolog_example.py)
+
+```bash
+docker compose exec runner python autolog_example.py
+```
+
+MLflow enregistre seul les hyperparamètres, les métriques d'entraînement et le modèle :
 
 ```python
-import mlflow
-from sklearn.ensemble import RandomForestClassifier
-
-# Activer l'auto-logging
+# À appeler avant fit() : c'est lui qui déclenche l'enregistrement
 mlflow.sklearn.autolog()
 
-mlflow.set_experiment("autolog-demo")
+with mlflow.start_run(run_name="random-forest-autolog") as run:
+    RandomForestClassifier(n_estimators=100, random_state=42).fit(X_train, y_train)
+```
 
-with mlflow.start_run():
-    model = RandomForestClassifier(n_estimators=100)
-    model.fit(X_train, y_train)
-    # MLflow log automatiquement les paramètres et métriques !
+Sans aucun appel à `log_param` ni `log_metric`, le run contient 19 paramètres et 7 métriques :
+
+```text
+Paramètres enregistrés : 19
+Métriques enregistrées : ['training_accuracy_score', 'training_f1_score', 'training_log_loss', 'training_precision_score', 'training_recall_score', 'training_roc_auc', 'training_score']
 ```
 
 ### Exemple 3 : Comparaison de modèles
 
-Voir le fichier `examples/sklearn_example.py` pour un exemple complet de comparaison de plusieurs algorithmes.
+Le script [`examples/sklearn_example.py`](examples/sklearn_example.py) entraîne 4 modèles sur le dataset Wine, compare leurs performances et enregistre le meilleur dans le Model Registry.
+
+```bash
+docker compose exec runner python sklearn_example.py
+```
 
 ### Exemple 4 : Logging du Dataset
 
-Pour tracer quelles données ont été utilisées pour l'entraînement :
+Script : [`examples/dataset_example.py`](examples/dataset_example.py)
 
-```python
-import mlflow
-import mlflow.data
-import pandas as pd
-
-# Créer un DataFrame avec vos données
-df_train = pd.DataFrame(X_train, columns=feature_names)
-df_train['target'] = y_train
-
-# Créer et loguer le dataset MLflow
-# source : origine des données (URL, fichier, API...)
-# name : nom descriptif du dataset
-dataset = mlflow.data.from_pandas(
-    df_train,
-    source="sklearn.datasets.load_wine",
-    name="wine_training_data"
-)
-
-# Loguer le dataset comme input du run
-# context : contexte d'utilisation ("training", "validation", "test")
-mlflow.log_input(dataset, context="training")
+```bash
+docker compose exec runner python dataset_example.py
 ```
 
-> **Résultat** : Le dataset apparaîtra dans l'onglet "Overview" du run dans l'interface MLflow.
+`log_input` relie le run aux données qui l'ont nourri. MLflow garde le nom, la source, une empreinte (digest) et le schéma, mais ne copie pas les données :
+
+```python
+for df_split, context in [(df_train, "training"), (df_test, "test")]:
+    dataset = mlflow.data.from_pandas(
+        df_split,
+        source="sklearn.datasets.load_wine",
+        name=f"wine_{context}",
+    )
+    # context : rôle du dataset dans ce run ("training", "validation", "test")
+    mlflow.log_input(dataset, context=context)
+```
+
+```text
+Dataset wine_training : digest 4f1188a9, training
+Dataset wine_test : digest 0ef539ce, test
+```
 
 ---
 
-## Model Registry et Mise en Production
+## De la commande à l'interface
+
+Chaque appel Python laisse une trace à un endroit précis de l'interface, et ses données sont rangées dans l'un des deux stores :
+
+| Appel Python | Où le voir sur `http://localhost:5000` | Stocké dans |
+|---|---|---|
+| `set_experiment("x")` | Page **Experiments**, liste de gauche | PostgreSQL |
+| `start_run(run_name="y")` | Une ligne dans la table des runs de l'expérience | PostgreSQL |
+| `log_param` | Run > **Overview** > Parameters | PostgreSQL |
+| `log_metric`, `log_metrics` | Run > **Overview** > Metrics ; courbes dans **Model metrics** | PostgreSQL |
+| `set_tag` | Run > **Overview** > Tags | PostgreSQL |
+| `log_input` | Run > **Overview** > Datasets used | PostgreSQL |
+| `log_figure`, `log_artifact` | Run > **Artifacts** | MinIO |
+| `sklearn.log_model` | Run > **Artifacts** > `model` ; Run > **Overview** > Logged models | MinIO |
+| `register_model` | Page **Models** ; Run > **Overview** > Registered models | PostgreSQL (le fichier reste dans MinIO) |
+| `set_registered_model_alias` | Page **Models** > `wine-classifier`, colonne Aliases | PostgreSQL |
+
+### Ce qui se passe à chaque appel
+
+Les métadonnées passent par le serveur MLflow. Les fichiers partent directement du script vers MinIO, ce qui explique que le `runner` ait besoin des identifiants S3.
+
+```mermaid
+sequenceDiagram
+    participant S as Script (runner)
+    participant M as Serveur MLflow
+    participant P as PostgreSQL
+    participant O as MinIO
+    participant U as Navigateur
+
+    S->>M: start_run()
+    M->>P: Crée le run
+    M-->>S: run_id et adresse des artefacts (s3://mlflow-artifacts/...)
+    S->>M: log_metric("accuracy", 0.92)
+    M->>P: Enregistre la métrique
+    S->>O: log_figure : envoi direct du PNG (S3)
+    U->>M: Ouvre la page du run
+    M->>P: Lit params et métriques
+    M->>O: Lit les artefacts
+    M-->>U: Page affichée
+```
+
+---
+
+---
+
+## Model Registry
 
 ### Qu'est-ce que le Model Registry ?
 
-Le **Model Registry** est un composant central de MLflow pour gérer le cycle de vie des modèles en production. Il permet de centraliser et de valider les modèles.
+Le **Model Registry** centralise les modèles validés et garde leur historique :
 
-#### Concepts Avancés
+- **Versions** : chaque enregistrement crée une nouvelle version (`v1`, `v2`, `v3`). MLflow les conserve toutes.
+- **Aliases** : une étiquette mobile posée sur une version. `@champion` désigne le modèle de référence, `@challenger` un candidat à évaluer. Un alias ne désigne qu'une seule version à la fois.
 
-1.  **Stages de déploiement**
-    Un modèle peut évoluer à travers des étapes prédéfinies :
-    *   **None** : Nouvellement enregistré.
-    *   **Staging** : Prêt pour les tests (QA, intégration).
-    *   **Production** : Validé et déployé pour les utilisateurs finaux.
-    *   **Archived** : Ancienne version retirée.
-
-2.  **Aliases (Nouveauté MLflow 2.x)**
-    Au lieu d'utiliser des numéros de version ou des stages, vous pouvez utiliser des alias flexibles :
-    *   `@champion` : Le modèle de référence actuel.
-    *   `@challenger` : Un candidat potentiel pour remplacer le champion.
-    
-    ```python
-    # Assignation d'un alias
-    client.set_registered_model_alias("wine-classifier", "champion", 1)
-    
-    # Chargement via alias
-    model = mlflow.sklearn.load_model("models:/wine-classifier@champion")
-    ```
-
-3.  **Politique de Versioning**
-    Chaque nouvel enregistrement incrémente automatiquement la version (`v1`, `v2`, `v3`). MLflow garde l'historique complet, permettant un rollback instantané en cas de problème.
-
-### Stages de déploiement
-
-```
-┌──────────┐     ┌──────────┐     ┌────────────┐     ┌──────────┐
-│   None   │ ──► │ Staging  │ ──► │ Production │ ──► │ Archived │
-│  (créé)  │     │  (test)  │     │ (déployé)  │     │ (ancien) │
-└──────────┘     └──────────┘     └────────────┘     └──────────┘
-```
-
-| Stage | Description |
-|-------|-------------|
-| **None** | Modèle enregistré, non validé |
-| **Staging** | En test/validation |
-| **Production** | Déployé et actif |
-| **Archived** | Ancienne version archivée |
+> [!NOTE]
+> Les **stages** (`None`, `Staging`, `Production`, `Archived`) et `transition_model_version_stage` sont dépréciés depuis MLflow 2.9. Les aliases les remplacent, c'est pourquoi `sklearn_example.py` les utilise.
 
 ### Enregistrer un modèle
 
 ```python
-import mlflow
-from mlflow.tracking import MlflowClient
-
-# Après l'entraînement, enregistrer le modèle
-model_uri = f"runs:/{run_id}/model"
 model_version = mlflow.register_model(
-    model_uri=model_uri,
-    name="mon-modele-classifier"
+    model_uri=f"runs:/{run_id}/model",
+    name="wine-classifier"
 )
-
-print(f"Version créée : {model_version.version}")
 ```
 
-### Promouvoir en Production
+### Désigner le modèle de référence
 
 ```python
 client = MlflowClient()
-
-# Transition vers Production
-# archive_existing_versions=True : archive les anciennes versions en prod
-client.transition_model_version_stage(
-    name="mon-modele-classifier",
-    version=model_version.version,
-    stage="Production",
-    archive_existing_versions=True
+client.set_registered_model_alias(
+    name="wine-classifier",
+    alias="champion",
+    version=model_version.version
 )
 ```
 
-### Charger un modèle en Production
+Pour revenir en arrière, reposez l'alias sur une version précédente. Le code qui charge `@champion` n'a pas à changer.
+
+### Charger un modèle
 
 ```python
-# Chargement par stage (recommandé pour les applications)
-model = mlflow.sklearn.load_model("models:/mon-modele-classifier/Production")
+# Par alias (recommandé pour les applications)
+model = mlflow.sklearn.load_model("models:/wine-classifier@champion")
 
-# Chargement par version spécifique
-model = mlflow.sklearn.load_model("models:/mon-modele-classifier/1")
-
-# Utilisation
-predictions = model.predict(X_new)
+# Par version
+model = mlflow.sklearn.load_model("models:/wine-classifier/1")
 ```
 
-
+> [!WARNING]
+> Dans `sklearn_example.py`, le modèle a été entraîné sur des données normalisées et le `StandardScaler` n'est pas enregistré avec lui. Il faut donc lui donner des données normalisées de la même façon. En conditions réelles, enregistrez plutôt un `Pipeline` scikit-learn complet.
 
 ---
 
@@ -379,11 +408,10 @@ predictions = model.predict(X_new)
 1. Sélectionnez plusieurs runs (checkbox)
 2. Cliquez sur "Compare"
 3. Explorez les visualisations natives (Scatter Plot, Contour Plot, Parallel Coordinates)
-4. **Onglet "Images"** : Grâce à `mlflow.log_figure()`, vous pouvez comparer visuellement les matrices de confusion côte à côte ou en superposition.
+
+Les matrices de confusion enregistrées avec `mlflow.log_figure()` se consultent dans l'onglet **Artifacts** de chaque run.
 
 ---
-
-
 
 ## Troubleshooting
 
@@ -415,7 +443,7 @@ chmod +x mlflow/entrypoint.sh
 **Cause :** Vous avez supprimé l'expérience dans l'interface MLflow. MLflow ne supprime pas définitivement l'expérience (soft delete), mais le nom reste réservé.
 
 **Solution :**
-1.  **Réinitialiser la base de données** (le plus simple) :
+1.  **Réinitialiser la base de données** (le plus simple, mais supprime tous les runs et artefacts) :
     ```bash
     docker compose down -v
     docker compose up -d
@@ -426,14 +454,7 @@ chmod +x mlflow/entrypoint.sh
 
 **Cause :** Les credentials MinIO ne sont pas configurés.
 
-**Solution :**
-```python
-import os
-
-os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://localhost:9000"
-os.environ["AWS_ACCESS_KEY_ID"] = "minio_admin"
-os.environ["AWS_SECRET_ACCESS_KEY"] = "minio_secret_2024"
-```
+**Solution :** Vérifiez que `.env` existe et contient `MINIO_ROOT_USER` et `MINIO_ROOT_PASSWORD`. Dans le conteneur `runner`, `docker-compose.yml` les transmet automatiquement. Depuis l'hôte, `load_dotenv()` lit ce même fichier et le script vise `http://localhost:9000` par défaut.
 
 ### Problème : L'interface MLflow est vide
 
@@ -441,8 +462,6 @@ os.environ["AWS_SECRET_ACCESS_KEY"] = "minio_secret_2024"
 1. Vérifiez que vous avez exécuté un script d'exemple
 2. Rafraîchissez la page
 3. Sélectionnez la bonne expérience dans le menu déroulant
-
-
 
 ### Réinitialiser complètement
 

@@ -45,9 +45,10 @@ crée le bucket S3 au démarrage puis s'arrête) :
 flowchart TD
   user[Utilisateur] -->|Navigateur| ui[MLflow UI :5000]
   subgraph reseau["Réseau Docker mlflow-network"]
-    runner[Runner] -->|params / métriques / artefacts| server[MLflow Server :5000]
+    runner[Runner] -->|params / métriques| server[MLflow Server :5000]
+    runner -->|artefacts S3| minio[(MinIO :9000)]
     server -->|métadonnées| db[(PostgreSQL :5432)]
-    server -->|artefacts S3| minio[(MinIO :9000)]
+    server -->|lecture des artefacts| minio
     setup[minio-setup] -. crée le bucket .-> minio
   end
   ui --- server
@@ -114,7 +115,7 @@ Copiez `.env.example` en `.env`, puis renseignez les valeurs. Variables réelles
 ## Structure du projet
 
 ```text
-mlflow_tuto/
+MLflow-Test-Bench/
 ├── docker-compose.yml       # Orchestration des 5 services
 ├── .env.example             # Modèle de configuration (à copier en .env)
 ├── mlflow/
@@ -123,6 +124,9 @@ mlflow_tuto/
 ├── examples/
 │   ├── Dockerfile           # Image du runner Python
 │   ├── requirements.txt     # Dépendances des exemples
+│   ├── basic_example.py     # Logging manuel : params, métriques, tags
+│   ├── autolog_example.py   # Auto-logging scikit-learn
+│   ├── dataset_example.py   # Logging de datasets
 │   └── sklearn_example.py   # Exemple complet : comparaison + Model Registry
 ├── documentation/
 │   ├── architecture.md      # Architecture technique : flux, décisions, volumes
@@ -142,8 +146,8 @@ en production.
 |---|---|---|
 | MLflow 2.19.0 | Serveur de tracking + Model Registry | Apache-2.0 |
 | PostgreSQL 15 | Backend store (métadonnées) | PostgreSQL License (open-source, proche BSD/MIT) |
-| MinIO | Artifact store S3 | AGPL-3.0 *(à confirmer selon la version `latest`)* |
-| MinIO Client (`mc`) | Création du bucket au démarrage | AGPL-3.0 *(à confirmer)* |
+| MinIO | Artifact store S3 | AGPL-3.0 |
+| MinIO Client (`mc`) | Création du bucket au démarrage | AGPL-3.0 |
 | Python 3.11 | Runtime des images | PSF License |
 | scikit-learn, pandas, numpy | ML & données (exemples) | BSD-3-Clause |
 | matplotlib | Graphiques (matrices de confusion) | Matplotlib License (type BSD) |
@@ -188,10 +192,13 @@ docker compose up -d --build
 
 | Fichier | Description |
 |---|---|
-| `examples/sklearn_example.py` | Exemple complet de bout en bout : chargement du dataset **Wine**, comparaison de 4 modèles scikit-learn (Random Forest, Logistic Regression, SVM RBF, Random Forest Large), logging des paramètres/métriques/artefacts (matrices de confusion via `log_figure`), puis enregistrement du meilleur modèle dans le **Model Registry** et mise en Production |
+| `examples/basic_example.py` | Logging manuel : paramètres, métrique suivie par étape, tags |
+| `examples/autolog_example.py` | Auto-logging scikit-learn : aucun appel à `log_param` ni `log_metric` |
+| `examples/dataset_example.py` | Logging des datasets d'entraînement et de test avec `log_input` |
+| `examples/sklearn_example.py` | Exemple complet de bout en bout : chargement du dataset **Wine**, comparaison de 4 modèles scikit-learn (Random Forest, Logistic Regression, SVM RBF, Random Forest Large), logging des paramètres/métriques/artefacts (matrices de confusion via `log_figure`), puis enregistrement du meilleur modèle dans le **Model Registry** avec l'alias `@champion` |
 
-> Le tutoriel évoque d'autres concepts (auto-logging, logging de dataset) sous forme
-> de snippets ; le seul script exécutable fourni est `sklearn_example.py`.
+Chaque script se lance dans le conteneur `runner` :
+`docker compose exec runner python <script>.py`.
 
 ## Documentation
 
@@ -212,4 +219,4 @@ Pour apprendre à utiliser MLflow, commencez par le [tutoriel complet](TUTORIAL.
 | Erreur S3 | Vérifiez que les variables d'environnement MinIO sont bien configurées |
 | "Permission denied" sur `entrypoint.sh` | `chmod +x mlflow/entrypoint.sh` (permissions perdues au passage Windows → WSL) |
 
-> Guide de dépannage détaillé (causes et solutions) : [TUTORIAL.md](TUTORIAL.md#-troubleshooting).
+> Guide de dépannage détaillé (causes et solutions) : [TUTORIAL.md](TUTORIAL.md#troubleshooting).
