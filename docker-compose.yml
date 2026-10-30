@@ -1,5 +1,5 @@
 # =========================================
-# Docker Compose - MLflow + MinIO + PostgreSQL
+# Docker Compose - MLflow + SeaweedFS + PostgreSQL
 # Tutoriel avec bonnes pratiques
 # =========================================
 
@@ -28,42 +28,85 @@ services:
       start_period: 10s
 
   # -----------------------------------------
-  # MinIO - Artifact Store (S3 compatible)
+  # SeaweedFS - Artifact Store (S3 compatible)
   # Stocke les modèles et artefacts
+  # Le fichier d'identités est écrit au démarrage dans un tmpfs, à partir
+  # du .env : aucune clé n'est versionnée ni visible dans docker inspect
+  # Ports publiés sur la boucle locale : les interfaces web n'ont pas d'auth
   # -----------------------------------------
-  minio:
-    image: minio/minio:latest
-    container_name: mlflow-minio
+  seaweedfs:
+    image: chrislusf/seaweedfs:3.80
+    container_name: mlflow-seaweedfs
+    hostname: seaweedfs
     restart: unless-stopped
-    command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+      S3_SECRET_KEY: ${S3_SECRET_KEY}
     ports:
-      - "9000:9000" # API S3
-      - "9001:9001" # Console Web
+      - "127.0.0.1:8333:8333" # API S3
+      - "127.0.0.1:8888:8888" # Interface web du filer
+      - "127.0.0.1:9333:9333" # État du cluster
+    tmpfs:
+      - /run/seaweedfs:mode=0700
     volumes:
-      - minio_data:/data
-    networks:
-      - mlflow-network
+      - seaweedfs_data:/data
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        set -e
+        umask 077
+        cat > /run/seaweedfs/s3.json <<EOF
+        {
+          "identities": [
+            {
+              "name": "mlflow",
+              "credentials": [
+                {
+                  "accessKey": "$${S3_ACCESS_KEY}",
+                  "secretKey": "$${S3_SECRET_KEY}"
+                }
+              ],
+              "actions": ["Admin", "Read", "Write", "List", "Tagging"]
+            }
+          ]
+        }
+        EOF
+        exec weed server \
+          -dir=/data \
+          -ip=seaweedfs \
+          -master.volumeSizeLimitMB=1024 \
+          -volume.max=0 \
+          -filer \
+          -s3 \
+          -s3.port=8333 \
+          -s3.config=/run/seaweedfs/s3.json
+    # -ip=seaweedfs : le serveur n'écoute que sur ce nom, pas sur localhost
+    # /healthz : la racine S3 non authentifiée répond 403
     healthcheck:
-      test: [ "CMD", "mc", "ready", "local" ]
+      test: [ "CMD", "wget", "-q", "-O", "/dev/null", "http://seaweedfs:8333/healthz" ]
       interval: 10s
       timeout: 5s
-      retries: 5
-      start_period: 10s
+      retries: 10
+      start_period: 20s
+    networks:
+      - mlflow-network
 
   # -----------------------------------------
-  # MinIO Client - Création automatique du bucket
+  # SeaweedFS Setup - Création automatique du bucket
   # -----------------------------------------
-  minio-setup:
-    image: minio/mc:latest
-    container_name: mlflow-minio-setup
+  seaweedfs-setup:
+    image: chrislusf/seaweedfs:3.80
+    container_name: mlflow-seaweedfs-setup
     depends_on:
-      minio:
+      seaweedfs:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c " mc alias set myminio http://minio:9000 ${MINIO_ROOT_USER} ${MINIO_ROOT_PASSWORD}; mc mb myminio/${MINIO_BUCKET} --ignore-existing; mc anonymous set download myminio/${MINIO_BUCKET}; exit 0; "
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        echo "s3.bucket.create -name ${S3_BUCKET}" | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888
+        echo "s3.bucket.list" | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888 | grep -q "${S3_BUCKET}"
     networks:
       - mlflow-network
 
@@ -82,10 +125,10 @@ services:
     environment:
       # Configuration MLflow (accès via le réseau Docker)
       MLFLOW_TRACKING_URI: http://mlflow:5000
-      # Configuration S3 pour MinIO (artefacts)
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
+      # Configuration S3 pour SeaweedFS (artefacts)
+      MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
     volumes:
       # Montage des exemples pour développement live
       # Note: pas de :ro pour permettre la création de fichiers temporaires (artefacts)
@@ -111,16 +154,16 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      minio-setup:
+      seaweedfs-setup:
         condition: service_completed_successfully
     environment:
       # Configuration du backend store (PostgreSQL)
       MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
-      # Configuration de l'artifact store (MinIO/S3)
-      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
-      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER}
-      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD}
-      MLFLOW_ARTIFACT_ROOT: s3://${MINIO_BUCKET}/
+      # Configuration de l'artifact store (SeaweedFS/S3)
+      MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      MLFLOW_ARTIFACT_ROOT: s3://${S3_BUCKET}/
     ports:
       - "5000:5000"
     networks:
@@ -138,8 +181,8 @@ services:
 volumes:
   postgres_data:
     name: mlflow-postgres-data
-  minio_data:
-    name: mlflow-minio-data
+  seaweedfs_data:
+    name: mlflow-seaweedfs-data
 
 # -----------------------------------------
 # Réseau isolé
