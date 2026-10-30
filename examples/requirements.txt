@@ -13,7 +13,7 @@ numpy>=1.24.0
 # Visualisation
 matplotlib>=3.7.0
 
-# Connexion S3 (MinIO)
+# Connexion S3 (SeaweedFS)
 boto3>=1.28.0
 
 # Utilitaires
