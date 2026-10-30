@@ -33,9 +33,11 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Installation des packages Python
+# sqlalchemy<2.1 : MLflow 2.19.0 plante à l'import avec SQLAlchemy 2.1
 RUN pip install --upgrade pip && \
     pip install \
     mlflow==2.19.0 \
+    "sqlalchemy<2.1" \
     psycopg2-binary \
     boto3
 
