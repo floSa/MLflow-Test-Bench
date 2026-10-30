@@ -33,10 +33,20 @@ FILER = "http://127.0.0.1:8888"
 MASTER = "http://127.0.0.1:9333"
 IMAGES = Path(__file__).resolve().parent.parent / "documentation" / "images"
 EXEMPLES = {
+    "comparaison-modeles": "sklearn_example.py",
     "tutoriel-basique": "basic_example.py",
     "autolog-demo": "autolog_example.py",
     "dataset-demo": "dataset_example.py",
+    "evaluation-modeles": "evaluation_example.py",
 }
+
+# Interface en mode "Model training", sans le panneau de l'assistant qui s'ouvre
+# à la première visite ; genai_example.py a besoin d'Ollama et se lance à part
+PREFERENCES = """() => {
+    localStorage.setItem('mlflow.workflowType_v1', '"machine_learning"');
+    localStorage.setItem('mlflow.assistant.fab.autoOpenedOnFirstLoad_v1', 'true');
+    localStorage.setItem('mlflow.assistant.panelOpen_v1', 'false');
+}"""
 
 # Dessine un cadre et une pastille numérotée autour de chaque élément ciblé
 ANNOTER = """([x, y, w, h, n]) => {
@@ -69,15 +79,7 @@ def runs(experiment_id):
 
 
 def preparer_donnees():
-    """Attend le premier entraînement du runner et lance les exemples manquants."""
-    for _ in range(60):
-        try:
-            api("registered-models/alias?name=wine-classifier&alias=champion")
-            break
-        except OSError:
-            time.sleep(5)
-    else:
-        raise SystemExit("Pas de modèle @champion : la stack tourne-t-elle ?")
+    """Lance les exemples dont l'expérience n'existe pas encore."""
     for nom, script in EXEMPLES.items():
         if nom not in experiences():
             subprocess.run(["docker", "compose", "exec", "-T", "runner", "python", script], check=True)
@@ -100,7 +102,7 @@ def capturer(page, url, nom, cibles=(), attente=3500, avant=None):
 
 
 def fermer_promotion(page):
-    """Ferme la fenêtre promotionnelle du registre, affichée à la première visite."""
+    """Ferme les fenêtres de découverte affichées à la première visite d'une page."""
     page.keyboard.press("Escape")
     page.wait_for_timeout(500)
 
@@ -110,18 +112,24 @@ def main():
     IMAGES.mkdir(parents=True, exist_ok=True)
     ids = experiences()
     comparaison = ids["comparaison-modeles"]
+    evaluation = ids["evaluation-modeles"]
     champion = api("registered-models/alias?name=wine-classifier&alias=champion")["model_version"]
+    modele_champion = champion["source"].split("/")[-1]
     tous = [r["info"]["run_id"] for r in runs(comparaison)]
     run_basique = runs(ids["tutoriel-basique"])[0]["info"]["run_id"]
     run_autolog = runs(ids["autolog-demo"])[0]["info"]["run_id"]
     run_dataset = runs(ids["dataset-demo"])[0]["info"]["run_id"]
+    run_candidat = next(r["info"]["run_id"] for r in runs(evaluation) if r["info"]["run_name"] == "candidat")
     url_run = f"{MLFLOW}/#/experiments/{comparaison}/runs/{champion['run_id']}"
+    url_stockage = f"{FILER}/buckets/mlflow-artifacts/{comparaison}"
 
     with sync_playwright() as p:
         navigateur = p.chromium.launch()
         page = navigateur.new_page(viewport={"width": 1440, "height": 760})
+        page.goto(MLFLOW)
+        page.evaluate(PREFERENCES)
 
-        capturer(page, f"{MLFLOW}/#/experiments/{comparaison}", "01-table-des-runs", [
+        capturer(page, f"{MLFLOW}/#/experiments/{comparaison}/runs", "01-table-des-runs", [
             lambda pg: pg.get_by_role("link", name="comparaison-modeles").first,
             lambda pg: pg.get_by_role("link", name="Random Forest Large"),
             lambda pg: pg.get_by_text("wine_training_data").first,
@@ -135,26 +143,26 @@ def main():
                     lignes.nth(i).check(force=True)
             pg.wait_for_timeout(500)
 
-        capturer(page, f"{MLFLOW}/#/experiments/{comparaison}", "02-selection-pour-comparer", [
+        capturer(page, f"{MLFLOW}/#/experiments/{comparaison}/runs", "02-selection-pour-comparer", [
             lambda pg: pg.get_by_role("button", name="Compare"),
         ], avant=selectionner)
 
-        page.set_viewport_size({"width": 1440, "height": 1050})
+        page.set_viewport_size({"width": 1440, "height": 1700})
         capturer(page, url_run, "03-run-overview", [
-            lambda pg: pg.get_by_text("Datasets used"),
-            lambda pg: pg.get_by_text("Tags", exact=True),
-            lambda pg: pg.get_by_text("Logged models"),
-            lambda pg: pg.get_by_text("Registered models"),
-            lambda pg: pg.get_by_role("heading", name="Parameters"),
+            lambda pg: pg.get_by_role("heading", name="Datasets"),
+            lambda pg: pg.get_by_role("heading", name="Tags"),
+            lambda pg: pg.get_by_role("heading", name="Registered models"),
             lambda pg: pg.get_by_role("heading", name="Metrics"),
+            lambda pg: pg.get_by_role("heading", name="Parameters"),
+            lambda pg: pg.get_by_role("heading", name="Logged models"),
         ])
         capturer(page, f"{MLFLOW}/#/experiments/{ids['autolog-demo']}/runs/{run_autolog}", "04-run-autolog", [
-            lambda pg: pg.get_by_role("heading", name="Parameters"),
             lambda pg: pg.get_by_role("heading", name="Metrics"),
+            lambda pg: pg.get_by_role("heading", name="Parameters"),
         ])
         page.set_viewport_size({"width": 1440, "height": 760})
         capturer(page, f"{MLFLOW}/#/experiments/{ids['dataset-demo']}/runs/{run_dataset}", "05-run-datasets", [
-            lambda pg: pg.get_by_text("Datasets used"),
+            lambda pg: pg.get_by_role("heading", name="Datasets"),
         ])
         capturer(page, f"{MLFLOW}/#/experiments/{ids['tutoriel-basique']}/runs/{run_basique}/model-metrics",
                  "06-courbe-de-metrique", [lambda pg: pg.get_by_text("loss", exact=True).first])
@@ -163,38 +171,108 @@ def main():
             lambda pg: pg.get_by_text("s3://mlflow-artifacts"),
         ])
 
+        def axes_parlants(pg):
+            """Remplace les axes par défaut par le modèle et ses scores."""
+            pg.get_by_role("button", name="Clear All").click()
+            for selecteur, valeurs in [(0, ["model_type"]), (1, ["cv_mean", "test_accuracy"])]:
+                champ = pg.locator(".ant-select-selection-search-input, .du-bois-light-select-selection-search-input").nth(selecteur)
+                for valeur in valeurs:
+                    champ.click(force=True)
+                    champ.fill(valeur)
+                    pg.wait_for_timeout(300)
+                    champ.press("Enter")
+                    pg.wait_for_timeout(500)
+                pg.keyboard.press("Escape")
+            pg.mouse.click(1000, 650)
+            pg.wait_for_timeout(1500)
+
         ids_json = urllib.parse.quote(json.dumps(tous))
         page.set_viewport_size({"width": 1440, "height": 1000})
         capturer(page, f'{MLFLOW}/#/compare-runs?runs={ids_json}&experiments=["{comparaison}"]', "08-comparaison", [
             lambda pg: pg.get_by_text("Parallel Coordinates Plot"),
-        ], attente=5000)
+        ], attente=5000, avant=axes_parlants)
         page.set_viewport_size({"width": 1440, "height": 760})
         capturer(page, f"{MLFLOW}/#/models", "09-registre-des-modeles", [
             lambda pg: pg.get_by_role("link", name="wine-classifier"),
             lambda pg: pg.get_by_text("champion").first,
         ], avant=fermer_promotion)
         capturer(page, f"{MLFLOW}/#/models/wine-classifier/versions/{champion['version']}", "10-version-du-modele", [
-            lambda pg: pg.get_by_role("link", name="Random Forest"),
+            lambda pg: pg.get_by_text("Source Run"),
+            lambda pg: pg.get_by_text("Source Model"),
             lambda pg: pg.get_by_text("champion").first,
         ], avant=fermer_promotion)
-        capturer(page, f"{FILER}/buckets/mlflow-artifacts/{comparaison}/{champion['run_id']}/artifacts/",
+        capturer(page, f"{url_stockage}/{champion['run_id']}/artifacts/",
                  "11-stockage-seaweedfs", [lambda pg: pg.get_by_role("link", name="confusion_matrix.png").first])
         capturer(page, f"{FILER}/buckets/mlflow-artifacts/", "12-seaweedfs-bucket", [
             lambda pg: pg.get_by_role("link", name="mlflow-artifacts"),
             lambda pg: pg.get_by_role("link", name=comparaison, exact=True).last,
         ], attente=1500)
-        capturer(page, f"{FILER}/buckets/mlflow-artifacts/{comparaison}/", "13-seaweedfs-runs", [
+        capturer(page, f"{url_stockage}/", "13-seaweedfs-runs", [
+            lambda pg: pg.get_by_role("link", name="models", exact=True),
             lambda pg: pg.get_by_role("link", name=champion["run_id"]),
         ], attente=1500)
-        capturer(page, f"{FILER}/buckets/mlflow-artifacts/{comparaison}/{champion['run_id']}/artifacts/model/",
-                 "14-seaweedfs-modele", [
+        capturer(page, f"{url_stockage}/models/{modele_champion}/artifacts/", "14-seaweedfs-modele", [
             lambda pg: pg.get_by_role("link", name="MLmodel"),
-            lambda pg: pg.get_by_role("link", name="model.pkl"),
+            lambda pg: pg.get_by_role("link", name="model.skops"),
         ], attente=1500)
         capturer(page, MASTER, "15-seaweedfs-cluster", [
             lambda pg: pg.get_by_text("Cluster status"),
             lambda pg: pg.get_by_role("heading", name="Topology"),
         ], attente=1500)
+
+        page.set_viewport_size({"width": 2100, "height": 500})
+        capturer(page, f"{MLFLOW}/#/experiments/{evaluation}/models", "16-logged-models", [
+            lambda pg: pg.get_by_role("link", name="candidat").first,
+            lambda pg: pg.get_by_text("accuracy_score").first,
+        ])
+        modele_candidat = page.get_by_role("link", name="candidat").first.get_attribute("href").rstrip("/").split("/")[-1]
+        page.set_viewport_size({"width": 1440, "height": 1100})
+        capturer(page, f"{MLFLOW}/#/experiments/{evaluation}/models/{modele_candidat}", "17-logged-model", [
+            lambda pg: pg.get_by_role("heading", name="Metrics"),
+            lambda pg: pg.get_by_text("wine_test").first,
+        ])
+        page.set_viewport_size({"width": 1440, "height": 760})
+        capturer(page, f"{MLFLOW}/#/experiments/{evaluation}/runs/{run_candidat}/artifacts/confusion_matrix.png",
+                 "18-graphiques-evaluation", [lambda pg: pg.get_by_text("confusion_matrix.png").first])
+        capturer(page, f"{MLFLOW}/#/experiments/{evaluation}/runs/{run_candidat}/system-metrics",
+                 "19-metriques-systeme", [lambda pg: pg.get_by_text("cpu_utilization_percentage").first])
+
+        if "genai-assistant" in ids:
+            genai = ids["genai-assistant"]
+            page.get_by_text("GenAI", exact=True).click()
+
+            def fermer_decouverte(pg):
+                pg.get_by_role("button", name="Got it").click()
+                pg.wait_for_timeout(500)
+
+            capturer(page, f"{MLFLOW}/#/experiments/{genai}/traces", "20-traces", [
+                lambda pg: pg.get_by_text("Combien", exact=False).first,
+                lambda pg: pg.get_by_text("Output", exact=True).first,
+            ], avant=fermer_decouverte)
+
+            def ouvrir_trace(pg):
+                pg.get_by_text("Combien", exact=False).first.click()
+                pg.wait_for_timeout(2500)
+
+            capturer(page, f"{MLFLOW}/#/experiments/{genai}/traces", "21-detail-trace", [
+                lambda pg: pg.get_by_text("chercher_fiche").first,
+                lambda pg: pg.get_by_text("Completions").first,
+            ], avant=ouvrir_trace)
+            capturer(page, f"{MLFLOW}/#/experiments/{genai}/evaluation-runs", "22-evaluation-genai", [
+                lambda pg: pg.get_by_text("contient_mot_cle", exact=False).first,
+            ])
+
+            def ouvrir_evaluation(pg):
+                pg.locator("a", has_text="-").filter(has_not_text="genai").last.click()
+                pg.wait_for_timeout(3000)
+
+            page.set_viewport_size({"width": 2300, "height": 620})
+            capturer(page, f"{MLFLOW}/#/experiments/{genai}/evaluation-runs", "23-detail-evaluation", [
+                lambda pg: pg.get_by_text("Response", exact=True).first,
+                lambda pg: pg.get_by_text("correctness").last,
+            ], avant=ouvrir_evaluation)
+        else:
+            print("genai-assistant absente : captures 20 à 23 ignorées (lancer genai_example.py)")
         navigateur.close()
 
 

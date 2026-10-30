@@ -22,5 +22,11 @@ matplotlib>=3.7.0
 # Connexion S3 (SeaweedFS)
 boto3>=1.28.0
 
+# Chapitre GenAI : client du LLM, et LiteLLM pour les juges de mlflow.genai
+openai>=1.0.0
+litellm>=1.0.0
+# Dépendance de LiteLLM : 4.2.1 corrige les failles des versions précédentes
+filelock>=4.2.1
+
 # Utilitaires
 python-dotenv>=1.0.0

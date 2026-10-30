@@ -110,7 +110,8 @@ def main():
         reference,
     )
 
-    # Le statut suit le Logged Model : il apparaît dans l'onglet Models
+    # Le statut suit le Logged Model. L'interface 3.17 n'affiche pas ces tags : il
+    # se relit en Python (tags.validation peut aussi servir de filtre de recherche)
     statut = "approuve" if approuve else "refuse"
     mlflow.MlflowClient().set_logged_model_tags(info_candidat.model_id, {"validation": statut})
 
