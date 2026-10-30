@@ -23,4 +23,5 @@ exec mlflow server \
     --port 5000 \
     --backend-store-uri "${MLFLOW_BACKEND_STORE_URI}" \
     --default-artifact-root "${MLFLOW_ARTIFACT_ROOT}" \
-    --no-serve-artifacts
+    --no-serve-artifacts \
+    --workers 2

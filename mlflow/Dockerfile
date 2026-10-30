@@ -3,7 +3,7 @@
 # =========================================
 
 # Étape 1: Image de base légère
-FROM python:3.11-slim AS base
+FROM python:3.12-slim AS base
 
 # Métadonnées de l'image
 LABEL maintainer="Florian"
@@ -32,14 +32,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
-# Installation des packages Python
-# sqlalchemy<2.1 : MLflow 2.19.0 plante à l'import avec SQLAlchemy 2.1
+# Installation des packages Python, aux versions exactes de requirements.lock
+COPY requirements.lock .
 RUN pip install --upgrade pip && \
-    pip install \
-    mlflow==2.19.0 \
-    "sqlalchemy<2.1" \
-    psycopg2-binary \
-    boto3
+    pip install -r requirements.lock
 
 # =========================================
 # Étape 3: Image finale légère

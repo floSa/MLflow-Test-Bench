@@ -57,6 +57,10 @@ from dotenv import load_dotenv
 # Suppression des warnings pour plus de clarté dans la sortie console
 warnings.filterwarnings('ignore')
 
+# skops, le format de sérialisation par défaut, refuse au chargement les types
+# qu'il ne connaît pas : le Random Forest contient des arbres de ce type-là
+TYPES_SKOPS_DE_CONFIANCE = ["sklearn.tree._tree.Tree"]
+
 # Chargement des variables d'environnement depuis le fichier .env
 # Cela permet de configurer les credentials sans les hardcoder
 load_dotenv()
@@ -94,7 +98,7 @@ def configurer_mlflow():
     # --------------------------------------------------------------------
     # SeaweedFS est une alternative open-source à Amazon S3
     # MLflow utilise le protocole S3 pour stocker les fichiers volumineux :
-    # - Modèles sérialisés (.pkl, .joblib)
+    # - Modèles sérialisés (format skops par défaut depuis MLflow 3)
     # - Graphiques (.png, .jpg)
     # - Fichiers de données
     
@@ -302,7 +306,7 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         model_index: Index numérique du modèle (pour faciliter la comparaison)
     
     Returns:
-        dict: Dictionnaire des métriques calculées
+        tuple: (metriques, model_uri), l'URI du modèle servant au Model Registry
     """
     # ========================================================================
     # DÉMARRAGE D'UN RUN MLFLOW
@@ -415,19 +419,18 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         # ====================================================================
         # ÉTAPE 7 : SAUVEGARDE DU MODÈLE
         # ====================================================================
-        # mlflow.sklearn.log_model() sérialise le modèle entraîné
-        # 
-        # artifact_path : dossier dans les artefacts du run
-        # Le modèle peut ensuite être chargé avec mlflow.sklearn.load_model()
-        # 
-        # Note : registered_model_name=None car on enregistrera le meilleur
-        # modèle plus tard dans le Model Registry
+        # mlflow.sklearn.log_model() sérialise le modèle entraîné et crée un
+        # Logged Model, un objet à part entière relié au run
+        #
+        # name : nom du Logged Model
+        # model_uri (models:/<model_id>) permet ensuite de le charger ou de
+        # l'enregistrer dans le Model Registry
         
-        mlflow.sklearn.log_model(
-            modele, 
-            artifact_path="model",
-            registered_model_name=None,
-            input_example=X_train[:5]  # Exemple pour inférer la signature
+        model_info = mlflow.sklearn.log_model(
+            modele,
+            name="model",
+            input_example=X_train[:5],  # Exemple pour inférer la signature
+            skops_trusted_types=TYPES_SKOPS_DE_CONFIANCE
         )
         
         # ====================================================================
@@ -461,10 +464,7 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         print(f"   ✅ F1-Score: {metriques['f1_score']:.4f}")
         print(f"   ✅ CV Score: {metriques['cv_mean']:.4f} (±{metriques['cv_std']:.4f})")
         
-        # Récupération de l'ID du run pour le Model Registry
-        run_id = mlflow.active_run().info.run_id
-        
-        return metriques, run_id
+        return metriques, model_info.model_uri
 
 
 # ============================================================================
@@ -535,7 +535,7 @@ def comparer_modeles():
     # ENTRAÎNEMENT ET COMPARAISON
     # ========================================================================
     resultats = {}
-    run_ids = {}
+    model_uris = {}
     
     print("\n" + "=" * 60)
     print("   📊 Comparaison des modèles")
@@ -543,14 +543,14 @@ def comparer_modeles():
     
     # Entraînement de chaque modèle avec un index pour la comparaison
     for index, (nom, modele) in enumerate(modeles.items(), start=1):
-        metriques, run_id = entrainer_modele(
+        metriques, model_uri = entrainer_modele(
             nom, modele, 
             X_train, X_test, y_train, y_test, 
             target_names, feature_names, df_train,
             model_index=index  # Index numérique pour les graphiques de comparaison
         )
         resultats[nom] = metriques
-        run_ids[nom] = run_id
+        model_uris[nom] = model_uri
     
     # ========================================================================
     # RÉSUMÉ DES RÉSULTATS
@@ -570,7 +570,7 @@ def comparer_modeles():
     
     # Identification du meilleur modèle
     meilleur_nom = df_resultats.index[0]
-    meilleur_run_id = run_ids[meilleur_nom]
+    meilleur_model_uri = model_uris[meilleur_nom]
     
     print(f"\n🏆 Meilleur modèle: {meilleur_nom}")
     print(f"   CV Score: {df_resultats.loc[meilleur_nom, 'cv_mean']:.4f}")
@@ -579,7 +579,7 @@ def comparer_modeles():
     # ========================================================================
     # ENREGISTREMENT DANS LE MODEL REGISTRY
     # ========================================================================
-    enregistrer_meilleur_modele(meilleur_run_id, meilleur_nom)
+    enregistrer_meilleur_modele(meilleur_model_uri, meilleur_nom)
     
     return resultats, X_test, y_test, target_names
 
@@ -588,7 +588,7 @@ def comparer_modeles():
 # SECTION 6 : MODEL REGISTRY (MISE EN PRODUCTION)
 # ============================================================================
 
-def enregistrer_meilleur_modele(run_id, nom_modele):
+def enregistrer_meilleur_modele(model_uri, nom_modele):
     """
     Enregistre le meilleur modèle dans le Model Registry de MLflow.
     
@@ -613,7 +613,7 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
        - models:/nom-modele/1 : charge une version spécifique
     
     Args:
-        run_id: ID du run contenant le modèle à enregistrer
+        model_uri: URI du Logged Model à enregistrer (models:/<model_id>)
         nom_modele: Nom du modèle (pour la description)
     
     Returns:
@@ -625,10 +625,6 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
     
     # Client MLflow pour les opérations avancées
     client = MlflowClient()
-    
-    # URI du modèle dans les artefacts du run
-    # Format : runs:/<run_id>/<artifact_path>
-    model_uri = f"runs:/{run_id}/model"
     
     # Nom du modèle dans le Registry
     # Ce nom doit être unique et descriptif
@@ -692,7 +688,7 @@ def demo_chargement_modele(X_test, y_test, target_names):
     Démontre comment charger un modèle depuis le Model Registry.
     
     Cette fonction montre les différentes façons de charger un modèle :
-    1. Depuis un run spécifique : runs:/<run_id>/model
+    1. Depuis un Logged Model : models:/<model_id>
     2. Depuis le Registry par version : models:/<name>/<version>
     3. Depuis le Registry par alias : models:/<name>@<alias>
     
@@ -762,7 +758,8 @@ def main():
     print("      2. Cliquez sur un run → Overview : voir le dataset loggé")
     print("      3. Cliquez sur un run → Artifacts : matrice de confusion et rapport")
     print("      4. Sélectionnez plusieurs runs → Compare : graphiques de comparaison")
-    print("      5. Menu 'Models' : voir le Model Registry")
+    print("      5. Onglet 'Models' de l'expérience : voir les Logged Models")
+    print("      6. Menu 'Model registry' : voir le modèle enregistré")
     print("\n   💡 Astuce pour la comparaison:")
     print("      Utilisez 'model_index' comme paramètre sur l'axe X")
     print("      pour différencier les modèles dans les graphiques.")

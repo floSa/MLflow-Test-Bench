@@ -3,7 +3,7 @@
 # Environnement Python isolé avec venv
 # =========================================
 
-FROM python:3.11-slim
+FROM python:3.12-slim
 
 # Métadonnées de l'image
 LABEL maintainer="Florian"
@@ -24,9 +24,9 @@ ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 WORKDIR /app
 
 # Copie et installation des dépendances
-COPY requirements.txt .
+COPY requirements.lock .
 RUN pip install --upgrade pip && \
-    pip install -r requirements.txt
+    pip install -r requirements.lock
 
 # Copie des scripts d'exemples
 COPY . .

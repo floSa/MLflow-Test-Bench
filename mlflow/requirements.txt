@@ -1,0 +1,7 @@
+# Dépendances directes du serveur MLflow
+# Versions exactes dans requirements.lock, installé par le Dockerfile. Pour le
+# régénérer après une modification :
+# uv pip compile --universal --python-version 3.12 requirements.txt -o requirements.lock
+mlflow==3.17.2
+psycopg[binary]
+boto3

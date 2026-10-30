@@ -1,12 +1,15 @@
-# Dépendances pour les exemples MLflow
-# =====================================
+# Dépendances directes des exemples MLflow
+# ========================================
+# Versions exactes dans requirements.lock, installé par le Dockerfile. Pour
+# le régénérer après une modification :
+# uv pip compile --universal --python-version 3.12 requirements.txt -o requirements.lock
 
 # MLflow client
-mlflow==2.19.0
+mlflow==3.17.2
 
 # Machine Learning
-# <=1.5.2 : dernière version prise en charge par l'autolog de MLflow 2.19.0
-scikit-learn>=1.4.0,<=1.5.2
+# 1.6.0 à 1.9.1 : versions prises en charge par l'autolog de MLflow 3.17.2
+scikit-learn>=1.6.0,<=1.9.1
 pandas>=2.0.0
 numpy>=1.24.0
 
