@@ -73,7 +73,7 @@ def configurer_mlflow():
     
     MLflow nécessite deux types de configuration :
     1. Le Tracking URI : où envoyer les métadonnées (paramètres, métriques)
-    2. Les credentials S3 : pour stocker les artefacts dans MinIO
+    2. Les credentials S3 : pour stocker les artefacts dans SeaweedFS
     
     Note: Si exécuté dans le conteneur Docker 'runner', les variables 
     d'environnement sont déjà définies dans docker-compose.yml.
@@ -91,25 +91,25 @@ def configurer_mlflow():
     mlflow.set_tracking_uri(tracking_uri)
     
     # --------------------------------------------------------------------
-    # Configuration S3 pour MinIO (stockage des artefacts)
+    # Configuration S3 pour SeaweedFS (stockage des artefacts)
     # --------------------------------------------------------------------
-    # MinIO est une alternative open-source à Amazon S3
+    # SeaweedFS est une alternative open-source à Amazon S3
     # MLflow utilise le protocole S3 pour stocker les fichiers volumineux :
     # - Modèles sérialisés (.pkl, .joblib)
     # - Graphiques (.png, .jpg)
     # - Fichiers de données
     
-    # Endpoint S3 : adresse du serveur MinIO
+    # Endpoint S3 : adresse de la passerelle S3 de SeaweedFS
     if "MLFLOW_S3_ENDPOINT_URL" not in os.environ:
-        os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://localhost:9000"
+        os.environ["MLFLOW_S3_ENDPOINT_URL"] = "http://localhost:8333"
     
-    # Credentials S3 : identifiants pour accéder à MinIO
-    # Ces valeurs doivent correspondre à MINIO_ROOT_USER/PASSWORD dans docker-compose.yml
+    # Credentials S3 : identifiants pour accéder à SeaweedFS
+    # Ces valeurs doivent correspondre à S3_ACCESS_KEY/S3_SECRET_KEY dans le .env
     if "AWS_ACCESS_KEY_ID" not in os.environ:
-        os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("MINIO_ROOT_USER", "minio_admin")
+        os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("S3_ACCESS_KEY", "mlflow_s3")
     # Pas de valeur par défaut pour le mot de passe : il vient uniquement du .env
-    if "AWS_SECRET_ACCESS_KEY" not in os.environ and os.getenv("MINIO_ROOT_PASSWORD"):
-        os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ["MINIO_ROOT_PASSWORD"]
+    if "AWS_SECRET_ACCESS_KEY" not in os.environ and os.getenv("S3_SECRET_KEY"):
+        os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ["S3_SECRET_KEY"]
     
     print("✅ Configuration MLflow terminée")
     print(f"   📡 Tracking URI: {mlflow.get_tracking_uri()}")

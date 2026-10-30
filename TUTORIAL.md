@@ -43,12 +43,12 @@ graph TD
     
     subgraph "Infrastructure Docker"
         Runner -->|Log Metrics| Server[MLflow Server]
-        Runner -->|Upload Artefacts| MinIO[MinIO S3 :9000]
+        Runner -->|Upload Artefacts| SeaweedFS[SeaweedFS S3 :8333]
         
         Server -->|Read/Write Metadata| DB[(PostgreSQL)]
-        Server -->|List Artefacts| MinIO
+        Server -->|List Artefacts| SeaweedFS
         
-        MinIO_Setup[MinIO Setup] -.->|Init Bucket| MinIO
+        Setup[SeaweedFS Setup] -.->|Init Bucket| SeaweedFS
     end
 ```
 
@@ -59,17 +59,17 @@ Base de données relationnelle qui stocke toutes les **métadonnées légères**
 - L'historique des versions du Model Registry
 - *Pourquoi ?* Offre performance et intégrité des données par rapport à un stockage fichier.
 
-#### 2. MinIO (Artifact Store)
-Serveur de stockage d'objets compatible Amazon S3. Il stocke les **fichiers lourds** (Artefacts) :
+#### 2. SeaweedFS (Artifact Store)
+Serveur de stockage d'objets doté d'une passerelle compatible Amazon S3. Il stocke les **fichiers lourds** (Artefacts) :
 - Modèles sérialisés (`.pkl`, `.h5`)
 - Graphiques et images
 - Datasets
 - *Pourquoi ?* Simule un environnement cloud (AWS S3) en local. MLflow ne stocke pas les fichiers dans la base de données.
 
-#### 3. MinIO Setup
+#### 3. SeaweedFS Setup
 Conteneur éphémère qui ne tourne que quelques secondes au démarrage.
-- *Rôle* : Créer automatiquement le bucket `mlflow-artifacts` dans MinIO.
-- *Pourquoi ?* MinIO démarre vide par défaut. Ce service nous évite de devoir configurer manuellement le bucket à chaque lancement.
+- *Rôle* : Créer automatiquement le bucket `mlflow-artifacts` dans SeaweedFS.
+- *Pourquoi ?* SeaweedFS démarre vide par défaut. Ce service nous évite de devoir configurer manuellement le bucket à chaque lancement.
 
 #### 4. Runner
 Environnement d'exécution isolé contenant Python et les librairies nécessaires.
@@ -120,7 +120,7 @@ Le coût : les mises à jour sont à notre charge. L'image finale pèse environ 
    ```bash
    docker compose ps
    ```
-   `mlflow-server`, `mlflow-minio` et `mlflow-postgres` doivent être `healthy`. `mlflow-runner` est `running`, sans état de santé. `mlflow-minio-setup` n'apparaît pas dans la liste : il s'arrête une fois le bucket créé.
+   `mlflow-server`, `mlflow-seaweedfs` et `mlflow-postgres` doivent être `healthy`. `mlflow-runner` est `running`, sans état de santé. `mlflow-seaweedfs-setup` n'apparaît pas dans la liste : il s'arrête une fois le bucket créé.
 
 4. **Accéder à l'interface** :
    Ouvrez [http://localhost:5000](http://localhost:5000)
@@ -319,21 +319,21 @@ Chaque appel Python laisse une trace à un endroit précis de l'interface, et se
 | `log_metric`, `log_metrics` | Run > **Overview** > Metrics ; courbes dans **Model metrics** | PostgreSQL |
 | `set_tag` | Run > **Overview** > Tags | PostgreSQL |
 | `log_input` | Run > **Overview** > Datasets used | PostgreSQL |
-| `log_figure`, `log_artifact` | Run > **Artifacts** | MinIO |
-| `sklearn.log_model` | Run > **Artifacts** > `model` ; Run > **Overview** > Logged models | MinIO |
-| `register_model` | Page **Models** ; Run > **Overview** > Registered models | PostgreSQL (le fichier reste dans MinIO) |
+| `log_figure`, `log_artifact` | Run > **Artifacts** | SeaweedFS |
+| `sklearn.log_model` | Run > **Artifacts** > `model` ; Run > **Overview** > Logged models | SeaweedFS |
+| `register_model` | Page **Models** ; Run > **Overview** > Registered models | PostgreSQL (le fichier reste dans SeaweedFS) |
 | `set_registered_model_alias` | Page **Models** > `wine-classifier`, colonne Aliases | PostgreSQL |
 
 ### Ce qui se passe à chaque appel
 
-Les métadonnées passent par le serveur MLflow. Les fichiers partent directement du script vers MinIO, ce qui explique que le `runner` ait besoin des identifiants S3.
+Les métadonnées passent par le serveur MLflow. Les fichiers partent directement du script vers SeaweedFS, ce qui explique que le `runner` ait besoin des identifiants S3.
 
 ```mermaid
 sequenceDiagram
     participant S as Script (runner)
     participant M as Serveur MLflow
     participant P as PostgreSQL
-    participant O as MinIO
+    participant O as SeaweedFS
     participant U as Navigateur
 
     S->>M: start_run()
@@ -452,9 +452,9 @@ chmod +x mlflow/entrypoint.sh
 
 ### Problème : "Error connecting to S3"
 
-**Cause :** Les credentials MinIO ne sont pas configurés.
+**Cause :** Les credentials S3 ne sont pas configurés.
 
-**Solution :** Vérifiez que `.env` existe et contient `MINIO_ROOT_USER` et `MINIO_ROOT_PASSWORD`. Dans le conteneur `runner`, `docker-compose.yml` les transmet automatiquement. Depuis l'hôte, `load_dotenv()` lit ce même fichier et le script vise `http://localhost:9000` par défaut.
+**Solution :** Vérifiez que `.env` existe et contient `S3_ACCESS_KEY` et `S3_SECRET_KEY`. Dans le conteneur `runner`, `docker-compose.yml` les transmet automatiquement. Depuis l'hôte, `load_dotenv()` lit ce même fichier et le script vise `http://localhost:8333` par défaut.
 
 ### Problème : L'interface MLflow est vide
 
