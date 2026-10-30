@@ -32,7 +32,7 @@ services:
   # Stocke les modèles et artefacts
   # Le fichier d'identités est écrit au démarrage dans un tmpfs, à partir
   # du .env : aucune clé n'est versionnée ni visible dans docker inspect
-  # Ports publiés sur la boucle locale : l'interface du filer n'a pas d'auth
+  # Ports publiés sur la boucle locale : les interfaces web n'ont pas d'auth
   # -----------------------------------------
   seaweedfs:
     image: chrislusf/seaweedfs:3.80
@@ -45,6 +45,7 @@ services:
     ports:
       - "127.0.0.1:8333:8333" # API S3
       - "127.0.0.1:8888:8888" # Interface web du filer
+      - "127.0.0.1:9333:9333" # État du cluster
     tmpfs:
       - /run/seaweedfs:mode=0700
     volumes:

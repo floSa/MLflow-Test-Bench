@@ -30,6 +30,7 @@ from playwright.sync_api import sync_playwright
 
 MLFLOW = "http://localhost:5000"
 FILER = "http://127.0.0.1:8888"
+MASTER = "http://127.0.0.1:9333"
 IMAGES = Path(__file__).resolve().parent.parent / "documentation" / "images"
 EXEMPLES = {
     "tutoriel-basique": "basic_example.py",
@@ -178,6 +179,22 @@ def main():
         ], avant=fermer_promotion)
         capturer(page, f"{FILER}/buckets/mlflow-artifacts/{comparaison}/{champion['run_id']}/artifacts/",
                  "11-stockage-seaweedfs", [lambda pg: pg.get_by_role("link", name="confusion_matrix.png").first])
+        capturer(page, f"{FILER}/buckets/mlflow-artifacts/", "12-seaweedfs-bucket", [
+            lambda pg: pg.get_by_role("link", name="mlflow-artifacts"),
+            lambda pg: pg.get_by_role("link", name=comparaison, exact=True).last,
+        ], attente=1500)
+        capturer(page, f"{FILER}/buckets/mlflow-artifacts/{comparaison}/", "13-seaweedfs-runs", [
+            lambda pg: pg.get_by_role("link", name=champion["run_id"]),
+        ], attente=1500)
+        capturer(page, f"{FILER}/buckets/mlflow-artifacts/{comparaison}/{champion['run_id']}/artifacts/model/",
+                 "14-seaweedfs-modele", [
+            lambda pg: pg.get_by_role("link", name="MLmodel"),
+            lambda pg: pg.get_by_role("link", name="model.pkl"),
+        ], attente=1500)
+        capturer(page, MASTER, "15-seaweedfs-cluster", [
+            lambda pg: pg.get_by_text("Cluster status"),
+            lambda pg: pg.get_by_role("heading", name="Topology"),
+        ], attente=1500)
         navigateur.close()
 
 

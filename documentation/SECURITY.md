@@ -38,7 +38,7 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 | Service | Exposé à l'hôte ? | Port(s) | Justification |
 |---------|-------------------|---------|---------------|
 | `mlflow` | oui | 5000 | UI + API de tracking |
-| `seaweedfs` | oui, sur `127.0.0.1` | 8333 (API S3), 8888 (filer) | Accès aux artefacts et interface web |
+| `seaweedfs` | oui, sur `127.0.0.1` | 8333 (API S3), 8888 (filer), 9333 (cluster) | Accès aux artefacts et interfaces web |
 | `postgres` | **non** | 5432 (interne) | Accessible uniquement par `mlflow` via le réseau Docker |
 | `runner` | **non** | — | Exécution de scripts, aucun service à exposer |
 | `seaweedfs-setup` | **non** | — | Conteneur éphémère (init du bucket) |
@@ -46,9 +46,9 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 Le backend PostgreSQL n'est donc **pas** joignable depuis la machine hôte, ce qui
 réduit la surface d'attaque.
 
-> **Attention** : l'UI MLflow (`:5000`) et l'interface du filer (`:8888`) n'ont aucune
-> authentification, et rien n'est chiffré. L'API S3 (`:8333`) refuse les requêtes anonymes
-> (403). MLflow est publié sur toutes les interfaces de l'hôte, le filer et l'API S3
+> **Attention** : l'UI MLflow (`:5000`) et les interfaces SeaweedFS (`:8888`, `:9333`)
+> n'ont aucune authentification, et rien n'est chiffré. L'API S3 (`:8333`) refuse les requêtes anonymes
+> (403). MLflow est publié sur toutes les interfaces de l'hôte, les ports SeaweedFS
 > seulement sur `127.0.0.1`. Acceptable en local ; à placer derrière un reverse-proxy
 > authentifié + HTTPS si exposé au réseau.
 

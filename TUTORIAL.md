@@ -370,9 +370,39 @@ L'onglet **Artifacts** montre les fichiers de `log_figure` et `log_artifact`. L'
 
 ![Onglet Artifacts d'un run](documentation/images/07-run-artefacts.png)
 
-Le même fichier se retrouve dans l'interface du filer SeaweedFS, sur `http://localhost:8888/buckets/mlflow-artifacts/` :
+### Suivre un artefact jusqu'à SeaweedFS
+
+L'adresse `s3://mlflow-artifacts/1/<run_id>/artifacts/confusion_matrix.png` se lit directement dans l'interface du filer, sur `http://localhost:8888/buckets/mlflow-artifacts/`.
+
+Le premier niveau du bucket est l'identifiant de l'expérience. Seules les expériences ayant enregistré des fichiers y figurent : `basic_example.py` et `dataset_example.py` n'en écrivent aucun.
+
+![Bucket mlflow-artifacts dans le filer](documentation/images/12-seaweedfs-bucket.png)
+
+Le niveau suivant est le Run ID :
+
+![Dossiers des runs dans le filer](documentation/images/13-seaweedfs-runs.png)
+
+Puis viennent les fichiers de `log_figure` et `log_artifact` :
 
 ![Le fichier vu depuis le filer SeaweedFS](documentation/images/11-stockage-seaweedfs.png)
+
+Le dossier `model` contient ce qu'a écrit `sklearn.log_model`, dont `MLmodel` (1) et `model.pkl` (2) :
+
+![Contenu du dossier model](documentation/images/14-seaweedfs-modele.png)
+
+L'état du stockage s'affiche sur `http://localhost:9333` :
+
+![État du cluster SeaweedFS](documentation/images/15-seaweedfs-cluster.png)
+
+La commande suivante liste les buckets et leur taille :
+
+```bash
+docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.list" | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888'
+```
+
+```text
+  mlflow-artifacts	size:932136	chunk:43
+```
 
 ### Ce qui se passe à chaque appel
 

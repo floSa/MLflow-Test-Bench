@@ -40,7 +40,7 @@ crée le bucket S3 au démarrage puis s'arrête) :
 |---|---|---|---|---|
 | `mlflow` | build `./mlflow` (Python 3.11 + MLflow 2.19.0) | 5000 | 5000 | Serveur de tracking + UI |
 | `postgres` | `postgres:15-alpine` | 5432 | *(non exposé)* | Backend store (métadonnées) |
-| `seaweedfs` | `chrislusf/seaweedfs:3.80` | 8333 / 8888 | 8333 / 8888 (`127.0.0.1`) | Artifact store S3 + interface web du filer |
+| `seaweedfs` | `chrislusf/seaweedfs:3.80` | 8333 / 8888 / 9333 | 8333 / 8888 / 9333 (`127.0.0.1`) | Artifact store S3 + interfaces web |
 | `seaweedfs-setup` | `chrislusf/seaweedfs:3.80` | — | — | Crée le bucket `mlflow-artifacts` puis s'arrête |
 | `runner` | build `./examples` (Python 3.11) | — | *(non exposé)* | Environnement d'exécution des exemples |
 
@@ -95,6 +95,7 @@ directive `command` dans `docker-compose.yml`), puis reste actif pour un usage i
 | MLflow UI | http://localhost:5000 |
 | SeaweedFS API (S3) | http://localhost:8333 |
 | SeaweedFS interface du filer | http://localhost:8888/buckets/mlflow-artifacts/ |
+| SeaweedFS état du cluster | http://localhost:9333 |
 
 ## Configuration
 
@@ -175,6 +176,7 @@ Ce projet est sous licence **MIT** — voir le fichier [LICENSE](LICENSE) pour l
 | MLflow UI | 5000 | http://localhost:5000 |
 | SeaweedFS API S3 | 8333 | http://localhost:8333 |
 | SeaweedFS filer | 8888 | http://localhost:8888/buckets/mlflow-artifacts/ |
+| SeaweedFS cluster | 9333 | http://localhost:9333 |
 
 ## Commandes utiles
 

@@ -32,7 +32,7 @@ proche de la production sur son poste.
 |---|---|---|
 | Serveur MLflow | Interface web et API | http://localhost:5000 |
 | PostgreSQL | Garde les paramètres, les métriques et le registre | Interne |
-| SeaweedFS | Garde les fichiers : modèles, images, rapports | http://localhost:8888/buckets/mlflow-artifacts/ |
+| SeaweedFS | Garde les fichiers : modèles, images, rapports | http://localhost:8888/buckets/mlflow-artifacts/ et http://localhost:9333 |
 | Runner | Exécute les scripts Python d'exemple | Interne |
 
 **Ce que ce n'est pas :** un déploiement de production. Il n'y a ni authentification sur
@@ -145,15 +145,59 @@ Chaque version renvoie vers le run qui l'a produite :
 
 ### Le stockage
 
-L'interface du filer SeaweedFS montre les fichiers tels qu'ils sont réellement rangés.
-Elle n'est pas nécessaire au quotidien, mais elle aide à comprendre où vont les données.
+SeaweedFS montre les fichiers tels qu'ils sont réellement rangés. Ce n'est pas nécessaire
+au quotidien, mais cela aide à comprendre où vont les données. Son interface, le *filer*,
+s'ouvre sur http://localhost:8888/buckets/mlflow-artifacts/.
 
-![Interface du filer SeaweedFS](images/11-stockage-seaweedfs.png)
+**Le bucket** contient un dossier par expérience ayant enregistré des fichiers :
 
-1. **Le même fichier** que dans l'onglet Artifacts, dans le bucket `mlflow-artifacts`.
+![Bucket mlflow-artifacts dans le filer](images/12-seaweedfs-bucket.png)
 
-> Cette interface n'a pas d'authentification et permet de modifier les fichiers. Ne
-> changez rien ici : passez par MLflow.
+1. **Le bucket** `mlflow-artifacts`, créé au démarrage par `seaweedfs-setup`.
+2. **Le dossier** porte l'identifiant de l'expérience : `1` est `comparaison-modeles`.
+
+`tutoriel-basique` (2) et `dataset-demo` (4) n'ont pas de dossier, car leurs runs
+n'enregistrent aucun fichier : ils ne contiennent que des métadonnées, gardées dans
+PostgreSQL.
+
+**Chaque expérience** contient un dossier par run :
+
+![Dossiers des runs dans le filer](images/13-seaweedfs-runs.png)
+
+1. **Le nom du dossier** est le Run ID affiché dans MLflow, ici celui du modèle `@champion`.
+
+**Chaque run** contient ses fichiers, avec la même arborescence que l'onglet Artifacts :
+
+![Fichiers d'un run dans le filer](images/11-stockage-seaweedfs.png)
+
+1. **La matrice de confusion** vue plus haut dans MLflow.
+
+**Le dossier `model`** contient ce qu'il faut pour recharger le modèle :
+
+![Contenu du dossier model](images/14-seaweedfs-modele.png)
+
+1. **`MLmodel`** décrit le modèle et comment le charger.
+2. **`model.pkl`** est le modèle sérialisé.
+
+**L'état du stockage** s'affiche sur http://localhost:9333 :
+
+![État du cluster SeaweedFS](images/15-seaweedfs-cluster.png)
+
+1. **Cluster status** : la capacité et le serveur principal.
+2. **Topology** : les volumes, c'est-à-dire les gros fichiers où SeaweedFS range les objets.
+
+**La même information en ligne de commande** :
+
+```bash
+docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.list" | weed shell -master=seaweedfs:9333 -filer=seaweedfs:8888'
+```
+
+```text
+  mlflow-artifacts	size:932136	chunk:43
+```
+
+> Ces interfaces n'ont pas d'authentification, et le filer permet de modifier les
+> fichiers. Ne changez rien ici : passez par MLflow.
 
 ---
 
@@ -236,6 +280,9 @@ docker compose logs -f mlflow
 ```bash
 docker compose down
 ```
+
+Au prochain `docker compose up -d`, le runner relance `sklearn_example.py` : vous
+retrouverez vos données, plus 4 nouveaux runs et une nouvelle version du modèle.
 
 **Tout effacer**, y compris les runs et les modèles :
 

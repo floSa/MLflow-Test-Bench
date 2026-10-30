@@ -24,7 +24,7 @@ bucket au démarrage puis s'arrête).
 |---|---|---|---|---|
 | `mlflow` | build [`./mlflow`](../mlflow/Dockerfile) (Python 3.11 + MLflow 2.19.0) | 5000 | 5000 | Serveur de tracking + UI |
 | `postgres` | `postgres:15-alpine` | 5432 | *(non exposé)* | Backend store (métadonnées) |
-| `seaweedfs` | `chrislusf/seaweedfs:3.80` | 8333 / 8888 | 8333 / 8888 (`127.0.0.1`) | Artifact store S3 + interface web du filer |
+| `seaweedfs` | `chrislusf/seaweedfs:3.80` | 8333 / 8888 / 9333 | 8333 / 8888 / 9333 (`127.0.0.1`) | Artifact store S3 + interfaces web |
 | `seaweedfs-setup` | `chrislusf/seaweedfs:3.80` | — | — | Crée le bucket `mlflow-artifacts` puis s'arrête |
 | `runner` | build [`./examples`](../examples/Dockerfile) (Python 3.11) | — | *(non exposé)* | Environnement d'exécution des exemples |
 
@@ -82,7 +82,7 @@ Séquence détaillée d'un appel, et correspondance entre appels Python et inter
 
 | Réseau | Services | Rôle |
 |---|---|---|
-| `mlflow-network` (bridge) | tous | Isolation ; seuls `mlflow` (5000) et `seaweedfs` (8333/8888, sur `127.0.0.1`) sont publiés sur l'hôte |
+| `mlflow-network` (bridge) | tous | Isolation ; seuls `mlflow` (5000) et `seaweedfs` (8333/8888/9333, sur `127.0.0.1`) sont publiés sur l'hôte |
 
 | Volume | Monté par | Contenu |
 |---|---|---|
@@ -133,6 +133,6 @@ Détail complet et risques connus : [SECURITY.md](SECURITY.md).
 | Aspect | Limitation / État | Recommandation |
 |---|---|---|
 | Auth UI MLflow | Aucune (`:5000` ouvert) | Reverse-proxy authentifié + HTTPS si exposé |
-| Interface du filer | Aucune authentification (`:8888` sur `127.0.0.1`) | Ne pas publier ce port hors local |
+| Interfaces SeaweedFS | Aucune authentification (`:8888` et `:9333` sur `127.0.0.1`) | Ne pas publier ces ports hors local |
 | Dépendances exemples | Bornes `>=`, pas de lockfile | Verrouiller pour la reproductibilité |
 | Secrets | Une seule identité S3, avec les droits `Admin` | Séparer écriture et lecture, comme le permet le fichier d'identités |
