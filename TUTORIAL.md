@@ -1,6 +1,8 @@
 # Tutoriel MLflow avec Docker
 
 > **Guide complet pour maîtriser le tracking d'expériences ML avec MLflow**
+>
+> Pour une simple visite du projet et de son interface, voir le [manuel utilisateur](documentation/manuel-utilisateur.md).
 
 ---
 
@@ -119,6 +121,14 @@ Le coût : les mises à jour sont à notre charge. L'image finale pèse environ 
 3. **Vérifier l'état** :
    ```bash
    docker compose ps
+   ```
+   Résultat attendu (colonnes abrégées) :
+   ```text
+   NAME               SERVICE     STATUS
+   mlflow-postgres    postgres    Up 7 minutes (healthy)
+   mlflow-runner      runner      Up 7 minutes
+   mlflow-seaweedfs   seaweedfs   Up 7 minutes (healthy)
+   mlflow-server      mlflow      Up 7 minutes (healthy)
    ```
    `mlflow-server`, `mlflow-seaweedfs` et `mlflow-postgres` doivent être `healthy`. `mlflow-runner` est `running`, sans état de santé. `mlflow-seaweedfs-setup` n'apparaît pas dans la liste : il s'arrête une fois le bucket créé.
 
@@ -246,6 +256,10 @@ Run terminé : <run_id>
 
 > Ce lien utilise `mlflow:5000`, l'adresse du serveur dans le réseau Docker. Depuis votre navigateur, remplacez `mlflow` par `localhost`.
 
+**Dans l'interface** : ouvrez l'onglet **Model metrics** du run. Les 5 valeurs de `loss` forment une courbe, alors que `accuracy`, enregistrée une seule fois, reste une barre.
+
+![Courbe de la métrique loss](documentation/images/06-courbe-de-metrique.png)
+
 ### Exemple 2 : Auto-logging avec scikit-learn
 
 Script : [`examples/autolog_example.py`](examples/autolog_example.py)
@@ -271,6 +285,10 @@ Paramètres enregistrés : 19
 Métriques enregistrées : ['training_accuracy_score', 'training_f1_score', 'training_log_loss', 'training_precision_score', 'training_recall_score', 'training_roc_auc', 'training_score']
 ```
 
+**Dans l'interface** : les compteurs **Parameters (19)** et **Metrics (7)** correspondent à la sortie du terminal. L'autolog a aussi enregistré un dataset et le modèle.
+
+![Run créé par l'autolog](documentation/images/04-run-autolog.png)
+
 ### Exemple 3 : Comparaison de modèles
 
 Le script [`examples/sklearn_example.py`](examples/sklearn_example.py) entraîne 4 modèles sur le dataset Wine, compare leurs performances et enregistre le meilleur dans le Model Registry.
@@ -278,6 +296,22 @@ Le script [`examples/sklearn_example.py`](examples/sklearn_example.py) entraîne
 ```bash
 docker compose exec runner python sklearn_example.py
 ```
+
+Le terminal résume les performances et désigne le meilleur modèle :
+
+```text
+                     test_accuracy  f1_score   cv_mean
+Random Forest             1.000000   1.00000  0.986207
+Random Forest Large       1.000000   1.00000  0.979064
+Logistic Regression       0.972222   0.97197  0.985961
+SVM RBF                   0.972222   0.97197  0.986207
+
+🏆 Meilleur modèle: Random Forest
+```
+
+**Dans l'interface** : chaque modèle devient une ligne de l'expérience `comparaison-modeles`. Seul le meilleur porte `wine-classifier` dans la colonne Models.
+
+![Table des runs de l'expérience comparaison-modeles](documentation/images/01-table-des-runs.png)
 
 ### Exemple 4 : Logging du Dataset
 
@@ -305,6 +339,10 @@ Dataset wine_training : digest 4f1188a9, training
 Dataset wine_test : digest 0ef539ce, test
 ```
 
+**Dans l'interface** : **Datasets used** affiche `wine_training` et le digest `4f1188a9` du terminal. Le bouton `+1` déplie le second dataset.
+
+![Datasets d'un run](documentation/images/05-run-datasets.png)
+
 ---
 
 ## De la commande à l'interface
@@ -322,7 +360,19 @@ Chaque appel Python laisse une trace à un endroit précis de l'interface, et se
 | `log_figure`, `log_artifact` | Run > **Artifacts** | SeaweedFS |
 | `sklearn.log_model` | Run > **Artifacts** > `model` ; Run > **Overview** > Logged models | SeaweedFS |
 | `register_model` | Page **Models** ; Run > **Overview** > Registered models | PostgreSQL (le fichier reste dans SeaweedFS) |
-| `set_registered_model_alias` | Page **Models** > `wine-classifier`, colonne Aliases | PostgreSQL |
+| `set_registered_model_alias` | Page **Models**, colonne Aliased versions ; `wine-classifier`, colonne Aliases | PostgreSQL |
+
+La capture ci-dessous repère ces éléments sur un run de `sklearn_example.py` : (1) `log_input`, (2) `set_tag`, (3) `log_model`, (4) `register_model`, (5) `log_param`, (6) `log_metrics`.
+
+![Onglet Overview d'un run](documentation/images/03-run-overview.png)
+
+L'onglet **Artifacts** montre les fichiers de `log_figure` et `log_artifact`. L'adresse en `s3://` (2) confirme qu'ils sont rangés dans SeaweedFS.
+
+![Onglet Artifacts d'un run](documentation/images/07-run-artefacts.png)
+
+Le même fichier se retrouve dans l'interface du filer SeaweedFS, sur `http://localhost:8888/buckets/mlflow-artifacts/` :
+
+![Le fichier vu depuis le filer SeaweedFS](documentation/images/11-stockage-seaweedfs.png)
 
 ### Ce qui se passe à chaque appel
 
@@ -364,6 +414,14 @@ Le **Model Registry** centralise les modèles validés et garde leur historique 
 > [!NOTE]
 > Les **stages** (`None`, `Staging`, `Production`, `Archived`) et `transition_model_version_stage` sont dépréciés depuis MLflow 2.9. Les aliases les remplacent, c'est pourquoi `sklearn_example.py` les utilise.
 
+**Dans l'interface** : la page **Models** liste les modèles et leurs aliases.
+
+![Liste des modèles enregistrés](documentation/images/09-registre-des-modeles.png)
+
+Chaque version renvoie vers le run qui l'a produite (1) et affiche ses aliases (2).
+
+![Détail d'une version de modèle](documentation/images/10-version-du-modele.png)
+
 ### Enregistrer un modèle
 
 ```python
@@ -384,7 +442,7 @@ client.set_registered_model_alias(
 )
 ```
 
-Pour revenir en arrière, reposez l'alias sur une version précédente. Le code qui charge `@champion` n'a pas à changer.
+Pour revenir en arrière, reposez l'alias sur une version précédente, en passant le numéro entre guillemets (`version="1"`). Le code qui charge `@champion` n'a pas à changer.
 
 ### Charger un modèle
 
@@ -407,7 +465,12 @@ model = mlflow.sklearn.load_model("models:/wine-classifier/1")
 
 1. Sélectionnez plusieurs runs (checkbox)
 2. Cliquez sur "Compare"
-3. Explorez les visualisations natives (Scatter Plot, Contour Plot, Parallel Coordinates)
+
+![Sélection des runs et bouton Compare](documentation/images/02-selection-pour-comparer.png)
+
+3. Explorez les visualisations natives (Parallel Coordinates, Scatter Plot, Box Plot, Contour Plot)
+
+![Page de comparaison des runs](documentation/images/08-comparaison.png)
 
 Les matrices de confusion enregistrées avec `mlflow.log_figure()` se consultent dans l'onglet **Artifacts** de chaque run.
 

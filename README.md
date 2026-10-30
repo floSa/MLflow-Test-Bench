@@ -12,8 +12,11 @@
 Ce projet fournit :
 
 - Un **serveur MLflow** containerisé avec backend PostgreSQL et artifact store S3 (SeaweedFS)
+- Un **manuel utilisateur** illustré pour découvrir le projet ([manuel-utilisateur.md](documentation/manuel-utilisateur.md))
 - Un **tutoriel complet** en français pour apprendre MLflow ([TUTORIAL.md](TUTORIAL.md))
 - Des **exemples de code** avec les bonnes pratiques
+
+![Table des runs dans l'interface MLflow](documentation/images/01-table-des-runs.png)
 
 ## Sommaire
 
@@ -129,8 +132,14 @@ MLflow-Test-Bench/
 │   ├── dataset_example.py   # Logging de datasets
 │   └── sklearn_example.py   # Exemple complet : comparaison + Model Registry
 ├── documentation/
+│   ├── manuel-utilisateur.md # Présentation et visite de l'interface
+│   ├── images/              # Captures, régénérées par le script ci-dessous
 │   ├── architecture.md      # Architecture technique : flux, décisions, volumes
 │   └── SECURITY.md          # Posture de sécurité (secrets, réseau, conteneurs)
+├── scripts/
+│   └── capture_screenshots.py # Régénère les captures de la documentation
+├── .github/workflows/
+│   └── smoke.yml            # CI : démarre la stack et lance chaque exemple
 ├── TUTORIAL.md              # Tutoriel pédagogique complet
 ├── LICENSE                  # MIT
 └── README.md
@@ -200,11 +209,12 @@ Chaque script se lance dans le conteneur `runner` :
 
 | Document | Contenu |
 |---|---|
+| [documentation/manuel-utilisateur.md](documentation/manuel-utilisateur.md) | Manuel utilisateur illustré : démarrage, visite de l'interface, scénarios d'usage, exploitation, glossaire |
 | [documentation/architecture.md](documentation/architecture.md) | Architecture technique : services, flux de bout en bout, décisions, réseaux et volumes |
 | [documentation/SECURITY.md](documentation/SECURITY.md) | Posture de sécurité : secrets, isolation réseau, conteneurs, risques connus |
 | [TUTORIAL.md](TUTORIAL.md) | Tutoriel pédagogique complet : concepts, guide pratique, Model Registry, troubleshooting |
 
-Pour apprendre à utiliser MLflow, commencez par le [tutoriel complet](TUTORIAL.md).
+Pour découvrir le projet, commencez par le [manuel utilisateur](documentation/manuel-utilisateur.md). Pour apprendre le code de MLflow, suivez le [tutoriel complet](TUTORIAL.md).
 
 ## Troubleshooting
 
