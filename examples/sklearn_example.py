@@ -1,13 +1,13 @@
 """
-02_sklearn_example.py - MLflow avec Scikit-Learn
-=================================================
+sklearn_example.py - MLflow avec Scikit-Learn
+=============================================
 
 Ce script démontre l'utilisation complète de MLflow avec scikit-learn :
 - Logging du dataset pour la traçabilité
 - Comparaison de plusieurs modèles (runs)
 - Génération d'artefacts standardisés pour la comparaison
 - Enregistrement du meilleur modèle dans le Model Registry
-- Mise en production automatique
+- Attribution de l'alias "champion" au meilleur modèle
 
 Prérequis:
 ---------
@@ -16,12 +16,12 @@ Prérequis:
 
 Exécution:
 ---------
-docker compose exec runner python 02_sklearn_example.py
+docker compose exec runner python sklearn_example.py
 
 Interface MLflow:
 ----------------
 Après exécution, consultez http://localhost:5000 pour voir :
-- Les runs dans l'expérience "02-comparaison-modeles"
+- Les runs dans l'expérience "comparaison-modeles"
 - Les datasets loggés (onglet Overview)
 - Les artefacts comparables (matrices de confusion)
 - Le modèle enregistré dans le Model Registry
@@ -107,8 +107,9 @@ def configurer_mlflow():
     # Ces valeurs doivent correspondre à MINIO_ROOT_USER/PASSWORD dans docker-compose.yml
     if "AWS_ACCESS_KEY_ID" not in os.environ:
         os.environ["AWS_ACCESS_KEY_ID"] = os.getenv("MINIO_ROOT_USER", "minio_admin")
-    if "AWS_SECRET_ACCESS_KEY" not in os.environ:
-        os.environ["AWS_SECRET_ACCESS_KEY"] = os.getenv("MINIO_ROOT_PASSWORD", "minio_secret_2024")
+    # Pas de valeur par défaut pour le mot de passe : il vient uniquement du .env
+    if "AWS_SECRET_ACCESS_KEY" not in os.environ and os.getenv("MINIO_ROOT_PASSWORD"):
+        os.environ["AWS_SECRET_ACCESS_KEY"] = os.environ["MINIO_ROOT_PASSWORD"]
     
     print("✅ Configuration MLflow terminée")
     print(f"   📡 Tracking URI: {mlflow.get_tracking_uri()}")
@@ -210,9 +211,7 @@ def creer_graphique_confusion(y_true, y_pred, target_names, nom_modele):
     - Hors diagonale : erreurs de classification
     
     IMPORTANT : Cette fonction retourne un objet Figure pour être utilisé
-    avec mlflow.log_image(), ce qui permet :
-    - La comparaison visuelle (Slide mode, Side by Side) dans l'interface
-    - Le regroupement automatique par nom dans l'onglet "Images"
+    avec mlflow.log_figure(), qui l'enregistre comme artefact du run.
     
     Args:
         y_true: Labels réels (ground truth)
@@ -433,16 +432,13 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         # ÉTAPE 8 : LOGGING DES ARTEFACTS
         # ====================================================================
         # Les artefacts sont des fichiers associés au run
-        # artifact_path="plots" : les place dans un sous-dossier 'plots'
+        # artifact_path="reports" : les place dans un sous-dossier 'reports'
         # 
         # IMPORTANT : Les noms standardisés permettent la comparaison
         # entre runs dans l'interface MLflow
         
-        # Matrice de confusion avec log_image
-        # log_image ajoute des métadonnées spécifiques permettant :
-        # - Mode "Slide" pour superposer les images
-        # - Mode "Side by Side" zoomable
-        # - Regroupement automatique par nom dans l'onglet "Images"
+        # Matrice de confusion : log_figure enregistre la figure à la racine
+        # des artefacts du run, sous le nom donné par artifact_file
         fig_cm = creer_graphique_confusion(
             y_test, y_pred_test, target_names, nom_modele
         )
@@ -485,7 +481,8 @@ def comparer_modeles():
     5. Enregistre le meilleur modèle dans le Model Registry
     
     Returns:
-        dict: Résultats de tous les modèles
+        tuple: (resultats, X_test, y_test, target_names)
+               Les données de test servent à la démonstration du chargement
     """
     # ========================================================================
     # CRÉATION DE L'EXPÉRIENCE
@@ -493,7 +490,7 @@ def comparer_modeles():
     # Une expérience regroupe tous les runs liés à un même objectif
     # Si l'expérience existe déjà, elle est réutilisée
     
-    experiment_name = "02-comparaison-modeles"
+    experiment_name = "comparaison-modeles"
     mlflow.set_experiment(experiment_name)
     print(f"\n🧪 Expérience: {experiment_name}")
     
@@ -578,7 +575,7 @@ def comparer_modeles():
     # ========================================================================
     enregistrer_meilleur_modele(meilleur_run_id, meilleur_nom)
     
-    return resultats
+    return resultats, X_test, y_test, target_names
 
 
 # ============================================================================
@@ -595,18 +592,18 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
        - Version 1, 2, 3... automatiquement incrémenté
        - Historique complet des modèles
     
-    2. STAGES : Cycle de vie du modèle
-       - None : Modèle enregistré, non validé
-       - Staging : En test/validation
-       - Production : Déployé en production
-       - Archived : Ancienne version archivée
+    2. ALIAS : Étiquette mobile posée sur une version
+       - @champion : le modèle de référence actuel
+       - @challenger : un candidat à évaluer
+       Remplacent les stages (None/Staging/Production/Archived), dépréciés
+       depuis MLflow 2.9
     
     3. DESCRIPTION : Documentation du modèle
        - Ajout de notes et descriptions
        - Traçabilité des changements
     
     4. CHARGEMENT SIMPLIFIÉ :
-       - models:/nom-modele/Production : charge le modèle en production
+       - models:/nom-modele@champion : charge la version portant l'alias
        - models:/nom-modele/1 : charge une version spécifique
     
     Args:
@@ -660,24 +657,23 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
         )
         
         # ====================================================================
-        # TRANSITION VERS PRODUCTION
+        # ATTRIBUTION DE L'ALIAS "CHAMPION"
         # ====================================================================
-        # transition_model_version_stage() change le stage du modèle
+        # set_registered_model_alias() pose l'alias sur cette version
         # 
-        # archive_existing_versions=True : archive automatiquement les 
-        # anciennes versions en Production (une seule version active)
+        # Un alias ne désigne qu'une seule version à la fois : il quitte
+        # automatiquement la version précédente, qui reste disponible
         
-        print(f"   🚀 Transition vers Production...")
-        client.transition_model_version_stage(
+        print(f"   🚀 Attribution de l'alias 'champion'...")
+        client.set_registered_model_alias(
             name=registry_name,
-            version=model_version.version,
-            stage="Production",
-            archive_existing_versions=True
+            alias="champion",
+            version=model_version.version
         )
         
-        print(f"   ✅ Modèle '{registry_name}' v{model_version.version} en Production!")
+        print(f"   ✅ Modèle '{registry_name}' v{model_version.version} désormais @champion!")
         print(f"\n   💡 Pour charger ce modèle:")
-        print(f"      model = mlflow.sklearn.load_model('models:/{registry_name}/Production')")
+        print(f"      model = mlflow.sklearn.load_model('models:/{registry_name}@champion')")
         
         return model_version
         
@@ -691,14 +687,19 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
 # SECTION 7 : DÉMONSTRATION DU CHARGEMENT D'UN MODÈLE
 # ============================================================================
 
-def demo_chargement_modele():
+def demo_chargement_modele(X_test, y_test, target_names):
     """
     Démontre comment charger un modèle depuis le Model Registry.
     
     Cette fonction montre les différentes façons de charger un modèle :
     1. Depuis un run spécifique : runs:/<run_id>/model
     2. Depuis le Registry par version : models:/<name>/<version>
-    3. Depuis le Registry par stage : models:/<name>/<stage>
+    3. Depuis le Registry par alias : models:/<name>@<alias>
+    
+    Args:
+        X_test: Features de test, déjà normalisées comme à l'entraînement
+        y_test: Labels réels
+        target_names: Noms des classes
     """
     print("\n" + "=" * 60)
     print("   📥 Démonstration du chargement de modèle")
@@ -707,20 +708,21 @@ def demo_chargement_modele():
     registry_name = "wine-classifier"
     
     try:
-        # Chargement du modèle en Production
-        model_uri = f"models:/{registry_name}/Production"
+        # Chargement de la version portant l'alias "champion"
+        model_uri = f"models:/{registry_name}@champion"
         print(f"   🔄 Chargement depuis: {model_uri}")
         
         model = mlflow.sklearn.load_model(model_uri)
         print(f"   ✅ Modèle chargé: {type(model).__name__}")
         
         # Test de prédiction
-        wine = load_wine()
-        X_sample = wine.data[:5]  # 5 premiers échantillons
-        predictions = model.predict(X_sample)
+        # Le modèle attend des données normalisées : le StandardScaler n'est pas
+        # enregistré avec lui, on utilise donc X_test et non les données brutes
+        predictions = model.predict(X_test[:5])
         
         print(f"   🎯 Prédictions sur 5 échantillons: {predictions}")
-        print(f"   📝 Classes: {[wine.target_names[p] for p in predictions]}")
+        print(f"   📝 Classes prédites: {[str(target_names[p]) for p in predictions]}")
+        print(f"   📝 Classes réelles:  {[str(target_names[t]) for t in y_test[:5]]}")
         
     except Exception as e:
         print(f"   ⚠️  Le modèle n'est pas encore enregistré: {e}")
@@ -750,10 +752,10 @@ def main():
     configurer_mlflow()
     
     # Comparaison des modèles (inclut l'enregistrement dans le Registry)
-    comparer_modeles()
+    _, X_test, y_test, target_names = comparer_modeles()
     
     # Démonstration du chargement d'un modèle
-    demo_chargement_modele()
+    demo_chargement_modele(X_test, y_test, target_names)
     
     # ========================================================================
     # INSTRUCTIONS POUR EXPLORER LES RÉSULTATS
@@ -763,9 +765,9 @@ def main():
     print("=" * 60)
     print("\n   📍 Consultez les résultats sur http://localhost:5000")
     print("\n   📌 Points à explorer dans l'interface MLflow:")
-    print("      1. Expérience '02-comparaison-modeles' : voir tous les runs")
+    print("      1. Expérience 'comparaison-modeles' : voir tous les runs")
     print("      2. Cliquez sur un run → Overview : voir le dataset loggé")
-    print("      3. Cliquez sur un run → Artifacts → plots : matrices de confusion")
+    print("      3. Cliquez sur un run → Artifacts : matrice de confusion et rapport")
     print("      4. Sélectionnez plusieurs runs → Compare : graphiques de comparaison")
     print("      5. Menu 'Models' : voir le Model Registry")
     print("\n   💡 Astuce pour la comparaison:")
