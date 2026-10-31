@@ -22,24 +22,25 @@ bucket au démarrage puis s'arrête).
 
 | Service | Image / Build | Port interne | Port hôte | Rôle |
 |---|---|---|---|---|
-| `mlflow` | build [`./mlflow`](../mlflow/Dockerfile) (Python 3.11 + MLflow 2.19.0) | 5000 | 5000 | Serveur de tracking + UI |
+| `mlflow` | build [`./mlflow`](../mlflow/Dockerfile) (Python 3.12 + MLflow 3.17.2) | 5000 | 5000 (`127.0.0.1`) | Serveur de tracking + UI |
 | `postgres` | `postgres:15-alpine` | 5432 | *(non exposé)* | Backend store (métadonnées) |
-| `seaweedfs` | `chrislusf/seaweedfs:3.80` | 8333 / 8888 / 9333 | 8333 / 8888 / 9333 (`127.0.0.1`) | Artifact store S3 + interfaces web |
-| `seaweedfs-setup` | `chrislusf/seaweedfs:3.80` | — | — | Crée le bucket `mlflow-artifacts` puis s'arrête |
-| `runner` | build [`./examples`](../examples/Dockerfile) (Python 3.11) | — | *(non exposé)* | Environnement d'exécution des exemples |
+| `seaweedfs` | `chrislusf/seaweedfs:4.51` | 8333 / 8888 / 9333 | 8333 / 8888 / 9333 (`127.0.0.1`) | Artifact store S3 + interfaces web |
+| `seaweedfs-setup` | `chrislusf/seaweedfs:4.51` | — | — | Crée le bucket `mlflow-artifacts` puis s'arrête |
+| `runner` | build [`./examples`](../examples/Dockerfile) (Python 3.12) | — | *(non exposé)* | Environnement d'exécution des exemples |
 
 ## 3. Stack technologique
 
-Versions lues dans le projet (`mlflow/Dockerfile`, `examples/requirements.txt`,
-`docker-compose.yml`).
+Versions lues dans le projet (`mlflow/requirements.txt`, `examples/requirements.txt`,
+`docker-compose.yml`). Les fichiers `requirements.lock` fixent toutes les versions exactes.
 
 | Couche | Technologie | Version |
 |---|---|---|
-| Serveur de tracking | MLflow | 2.19.0 (avec SQLAlchemy < 2.1) |
-| Runtime des images | Python | 3.11-slim |
+| Serveur de tracking | MLflow | 3.17.2 (SQLAlchemy 2.1, psycopg 3) |
+| Runtime des images | Python | 3.12-slim |
 | Backend store | PostgreSQL | 15-alpine |
-| Artifact store | SeaweedFS | 3.80 |
-| ML & données (exemples) | scikit-learn / pandas / numpy | >= 1.4 et <= 1.5.2 / >= 2.0 / >= 1.24 |
+| Artifact store | SeaweedFS | 4.51 |
+| ML & données (exemples) | scikit-learn / pandas / numpy | >= 1.6 et <= 1.9.1 / >= 2.0 / >= 1.24 |
+| GenAI (exemple Ollama) | openai / litellm | >= 1.0 / >= 1.0 |
 | Visualisation (exemples) | matplotlib | >= 3.7 |
 | Client S3 | boto3 | >= 1.28 |
 
@@ -54,9 +55,9 @@ Parcours d'un entraînement lancé depuis le `runner` :
 2. Le client MLflow envoie les **métadonnées** (params, métriques, tags) au serveur
    `mlflow`, qui les persiste dans **PostgreSQL**.
 3. Les **artefacts** (modèle, figures) partent directement du `runner` vers le bucket
-   **SeaweedFS** `mlflow-artifacts`. Le serveur étant lancé avec une racine explicite en
-   `s3://`, `--serve-artifacts` ne les fait pas passer par lui, d'où les identifiants S3
-   dans l'environnement du `runner`.
+   **SeaweedFS** `mlflow-artifacts`. Le serveur est lancé avec `--no-serve-artifacts` et une
+   racine en `s3://` : il ne les relaie pas, d'où les identifiants S3 dans l'environnement
+   du `runner`.
 4. L'utilisateur consulte les runs via l'**UI MLflow** sur `http://localhost:5000` ; le
    serveur lit les artefacts dans SeaweedFS pour les afficher.
 
@@ -82,7 +83,7 @@ Séquence détaillée d'un appel, et correspondance entre appels Python et inter
 
 | Réseau | Services | Rôle |
 |---|---|---|
-| `mlflow-network` (bridge) | tous | Isolation ; seuls `mlflow` (5000) et `seaweedfs` (8333/8888/9333, sur `127.0.0.1`) sont publiés sur l'hôte |
+| `mlflow-network` (bridge) | tous | Isolation ; seuls `mlflow` (5000) et `seaweedfs` (8333/8888/9333) sont publiés sur l'hôte, sur `127.0.0.1` |
 
 | Volume | Monté par | Contenu |
 |---|---|---|
@@ -108,6 +109,12 @@ Les deux stores sont des volumes Docker **nommés** : les données survivent à
   environnement cloud S3 (AWS) en local et sépare artefacts lourds et métadonnées.
   Il remplace MinIO, dont les images ont été retirées de Docker Hub et le dépôt archivé.
   *Limite* : le fichier d'identités est moins direct que deux variables d'environnement.
+- **Serveur à 2 workers, sans exécuteur de tâches** *plutôt que* les réglages par défaut,
+  *parce que* ceux-ci occupent 2,2 Gio de RAM, contre environ 600 Mio mesurés ici.
+  *Limite* : l'évaluation en ligne des traces n'est pas disponible.
+- **Runner sans entraînement au démarrage** *plutôt qu'*un exemple lancé à chaque `up`,
+  *parce qu'*un redémarrage ne doit ni créer de version ni déplacer l'alias `@champion`.
+  *Limite* : un premier `exec` est nécessaire pour remplir l'interface.
 - **Bucket créé par un conteneur `seaweedfs-setup` éphémère** *plutôt que* configuration
   manuelle, *parce que* SeaweedFS démarre vide et l'automatisation évite une étape à chaque
   lancement.
@@ -132,7 +139,7 @@ Détail complet et risques connus : [SECURITY.md](SECURITY.md).
 
 | Aspect | Limitation / État | Recommandation |
 |---|---|---|
-| Auth UI MLflow | Aucune (`:5000` ouvert) | Reverse-proxy authentifié + HTTPS si exposé |
+| Auth UI MLflow | Aucune (`:5000` sur `127.0.0.1`) | Reverse-proxy authentifié + HTTPS si exposé |
 | Interfaces SeaweedFS | Aucune authentification (`:8888` et `:9333` sur `127.0.0.1`) | Ne pas publier ces ports hors local |
-| Dépendances exemples | Bornes `>=`, pas de lockfile | Verrouiller pour la reproductibilité |
+| GenAI | Ollama hors de ce projet, exemple absent de la CI | Tester avec un autre serveur compatible OpenAI si besoin |
 | Secrets | Une seule identité S3, avec les droits `Admin` | Séparer écriture et lecture, comme le permet le fichier d'identités |

@@ -74,13 +74,16 @@ mlflow-seaweedfs   seaweedfs   Up 7 minutes (healthy)
 mlflow-server      mlflow      Up 7 minutes (healthy)
 ```
 
-**4. Ouvrir http://localhost:5000.** Vous n'avez rien à lancer : au démarrage, le runner
-entraîne déjà 4 modèles sur le jeu de données Wine, et le résultat apparaît en quelques
-secondes. Pour le suivre :
+**4. Lancer un premier entraînement.** Le script entraîne 4 modèles sur le jeu de données
+Wine, en moins d'une minute :
 
 ```bash
-docker compose logs -f runner
+docker compose exec runner python sklearn_example.py
 ```
+
+**5. Ouvrir http://localhost:5000.** En haut à gauche, un bouton bascule entre **GenAI**,
+affiché par défaut, et **Model training** : choisissez **Model training**. Le panneau
+**MLflow Assistant**, ouvert à la première visite, se ferme avec sa croix.
 
 ---
 
@@ -88,7 +91,7 @@ docker compose logs -f runner
 
 ### La table des runs
 
-Dans **Experiments**, choisissez `comparaison-modeles`. Chaque ligne est un entraînement,
+Dans **Experiments**, ouvrez `comparaison-modeles`. Chaque ligne est un entraînement,
 appelé *run*.
 
 ![Table des runs de l'expérience comparaison-modeles](images/01-table-des-runs.png)
@@ -100,16 +103,17 @@ appelé *run*.
 
 ### Le détail d'un run
 
-Cliquez sur `Random Forest`. L'onglet **Overview** résume tout ce qui a été enregistré.
+Cliquez sur `Logistic Regression`, le modèle retenu. L'onglet **Overview** résume tout ce
+qui a été enregistré.
 
 ![Onglet Overview d'un run](images/03-run-overview.png)
 
-1. **Datasets used** : les données d'entraînement.
+1. **Datasets** : les données d'entraînement.
 2. **Tags** : des étiquettes libres, utiles pour filtrer.
-3. **Logged models** : le modèle sauvegardé avec ce run.
-4. **Registered models** : sa version dans le registre.
+3. **Registered models** : sa version dans le registre.
+4. **Metrics** : les résultats mesurés.
 5. **Parameters** : les réglages en entrée.
-6. **Metrics** : les résultats mesurés.
+6. **Logged models** : le modèle sauvegardé avec ce run.
 
 ### Les courbes
 
@@ -129,7 +133,7 @@ L'onglet **Artifacts** liste les fichiers du run et affiche les images.
 
 ### Le registre des modèles
 
-Le menu **Models** liste les modèles retenus.
+Le menu **Model registry** liste les modèles retenus.
 
 ![Liste des modèles enregistrés](images/09-registre-des-modeles.png)
 
@@ -141,7 +145,8 @@ Chaque version renvoie vers le run qui l'a produite :
 ![Détail d'une version de modèle](images/10-version-du-modele.png)
 
 1. **Source Run** : le run d'origine, pour retrouver ses réglages et ses données.
-2. **Aliases** : le crayon permet de déplacer l'alias depuis l'interface.
+2. **Source Model** : le Logged Model, l'objet qui porte les fichiers du modèle.
+3. **Aliases** : le crayon permet de déplacer l'alias depuis l'interface.
 
 ### Le stockage
 
@@ -158,13 +163,14 @@ s'ouvre sur http://localhost:8888/buckets/mlflow-artifacts/.
 
 `tutoriel-basique` (2) et `dataset-demo` (4) n'ont pas de dossier, car leurs runs
 n'enregistrent aucun fichier : ils ne contiennent que des métadonnées, gardées dans
-PostgreSQL.
+PostgreSQL. `.uploads` est un dossier interne de SeaweedFS.
 
-**Chaque expérience** contient un dossier par run :
+**Chaque expérience** contient un dossier pour les modèles et un dossier par run :
 
 ![Dossiers des runs dans le filer](images/13-seaweedfs-runs.png)
 
-1. **Le nom du dossier** est le Run ID affiché dans MLflow, ici celui du modèle `@champion`.
+1. **`models`** contient les modèles de tous les runs de l'expérience.
+2. **Le nom du dossier** est le Run ID affiché dans MLflow, ici celui du modèle `@champion`.
 
 **Chaque run** contient ses fichiers, avec la même arborescence que l'onglet Artifacts :
 
@@ -172,12 +178,13 @@ PostgreSQL.
 
 1. **La matrice de confusion** vue plus haut dans MLflow.
 
-**Le dossier `model`** contient ce qu'il faut pour recharger le modèle :
+**Le dossier d'un modèle**, `models/<model_id>/artifacts/`, contient ce qu'il faut pour le
+recharger :
 
 ![Contenu du dossier model](images/14-seaweedfs-modele.png)
 
 1. **`MLmodel`** décrit le modèle et comment le charger.
-2. **`model.pkl`** est le modèle sérialisé.
+2. **`model.skops`** est le modèle sérialisé.
 
 **L'état du stockage** s'affiche sur http://localhost:9333 :
 
@@ -193,7 +200,7 @@ docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.list" | weed shell -mast
 ```
 
 ```text
-  mlflow-artifacts	size:932136	chunk:43
+  mlflow-artifacts	size:17184168	logical:17184168	chunk:73
 ```
 
 > Ces interfaces n'ont pas d'authentification, et le filer permet de modifier les
@@ -228,13 +235,16 @@ l'alias `@champion`. Le terminal résume les performances :
 
 ```text
                      test_accuracy  f1_score   cv_mean
+Logistic Regression       0.972222   0.97197  0.993103
 Random Forest             1.000000   1.00000  0.986207
-Random Forest Large       1.000000   1.00000  0.979064
-Logistic Regression       0.972222   0.97197  0.985961
 SVM RBF                   0.972222   0.97197  0.986207
+Random Forest Large       1.000000   1.00000  0.979064
 
-🏆 Meilleur modèle: Random Forest
+🏆 Meilleur modèle: Logistic Regression
 ```
+
+Le meilleur modèle est celui qui a le meilleur score en validation croisée (`cv_mean`), pas
+celui qui a le meilleur score sur le jeu de test.
 
 ### Essayer les autres exemples
 
@@ -243,6 +253,10 @@ SVM RBF                   0.972222   0.97197  0.986207
 | `docker compose exec runner python basic_example.py` | Enregistrement manuel | Expérience `tutoriel-basique` |
 | `docker compose exec runner python autolog_example.py` | Enregistrement automatique | Expérience `autolog-demo` |
 | `docker compose exec runner python dataset_example.py` | Traçabilité des données | Expérience `dataset-demo` |
+| `docker compose exec runner python evaluation_example.py` | Évaluation, contrôle par seuils, CPU et mémoire | Expérience `evaluation-modeles`, onglet **Models** |
+
+Un dernier exemple, `genai_example.py`, trace et évalue un assistant LLM. Il a besoin d'un
+serveur Ollama : voir [le tutoriel](../TUTORIAL.md#genai--tracing-et-évaluation).
 
 ### Recharger le modèle de référence
 
@@ -251,7 +265,7 @@ docker compose exec runner python -c "import mlflow.sklearn; m = mlflow.sklearn.
 ```
 
 ```text
-RandomForestClassifier
+Pipeline
 ```
 
 ### Revenir à une version précédente
@@ -263,7 +277,8 @@ en ligne de commande. Le numéro de version se passe entre guillemets :
 docker compose exec runner python -c "from mlflow import MlflowClient; MlflowClient().set_registered_model_alias('wine-classifier', 'champion', '1')"
 ```
 
-Le code qui charge `@champion` utilisera cette version, sans autre changement.
+Le code qui charge `@champion` utilisera cette version, sans autre changement. Le choix
+tient après un redémarrage : seul un nouveau `sklearn_example.py` déplace l'alias.
 
 ---
 
@@ -281,8 +296,7 @@ docker compose logs -f mlflow
 docker compose down
 ```
 
-Au prochain `docker compose up -d`, le runner relance `sklearn_example.py` : vous
-retrouverez vos données, plus 4 nouveaux runs et une nouvelle version du modèle.
+Au prochain `docker compose up -d`, vous retrouvez vos données telles quelles.
 
 **Tout effacer**, y compris les runs et les modèles :
 
@@ -296,15 +310,54 @@ docker compose down -v
 docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" "$POSTGRES_DB"' > mlflow.sql
 ```
 
-**Sauvegarder les fichiers :**
+**Sauvegarder les fichiers**, avec SeaweedFS arrêté pour une copie cohérente :
 
 ```bash
-docker compose exec -T seaweedfs tar czf - /data > seaweedfs.tar.gz
+docker compose stop seaweedfs
+```
+
+```bash
+docker compose run --rm -T --no-deps --entrypoint tar seaweedfs czf - /data > seaweedfs.tar.gz
+```
+
+```bash
+docker compose start seaweedfs
 ```
 
 Gardez les deux ensemble : l'une sans l'autre ne permet pas de retrouver un run complet.
-Ces fichiers contiennent vos données, ne les committez pas. Leur restauration n'a pas été
-testée.
+Ces fichiers contiennent vos données, ne les committez pas.
+
+**Restaurer** sur une installation vide. Cette procédure a été testée après un
+`docker compose down -v` : expériences, alias, artefacts et chargement du modèle sont
+revenus.
+
+```bash
+docker compose up -d postgres seaweedfs
+```
+
+```bash
+docker compose stop seaweedfs
+```
+
+```bash
+docker compose run --rm -T --no-deps --entrypoint tar seaweedfs xzf - -C / < seaweedfs.tar.gz
+```
+
+```bash
+docker compose exec -T postgres sh -c 'psql -q -U "$POSTGRES_USER" -d "$POSTGRES_DB"' < mlflow.sql
+```
+
+```bash
+docker compose up -d
+```
+
+**Monter depuis une version antérieure.** Sauvegardez d'abord : la base migrée ne redevient
+pas compatible avec l'ancienne version. Le passage de MLflow 2.19 et SeaweedFS 3.80 à
+MLflow 3.17 et SeaweedFS 4.51 a été testé sur les mêmes volumes. Il suffit de relancer
+`docker compose up -d --build` : le serveur migre sa base seul au démarrage. Les runs,
+l'alias, les artefacts et un nouvel entraînement fonctionnent. L'ancien modèle se charge,
+avec un avertissement `InconsistentVersionWarning` car il vient de scikit-learn 1.5.2 :
+réentraînez-le plutôt que de vous y fier.
 
 ---
 
@@ -314,7 +367,8 @@ testée.
 |---|---|
 | `The "S3_ACCESS_KEY" variable is not set` | Votre `.env` date d'avant SeaweedFS. Recréez-le depuis `.env.example`. |
 | « Connection refused » sur le port 5000 | Le serveur démarre encore. Vérifiez avec `docker compose ps` et attendez `healthy`. |
-| L'interface est vide | Vérifiez l'expérience sélectionnée à gauche et suivez `docker compose logs -f runner`. |
+| L'interface est vide | Rien ne s'entraîne au démarrage : lancez `docker compose exec runner python sklearn_example.py`. |
+| Je ne vois ni **Runs** ni **Models** | L'interface est en mode **GenAI** : choisissez **Model training** en haut à gauche. |
 | Un lien du terminal commence par `http://mlflow:5000` | Remplacez `mlflow` par `localhost` dans le navigateur. |
 | « Cannot set a deleted experiment » | Le nom reste réservé après une suppression : changez-le dans le script. |
 
@@ -331,6 +385,8 @@ Plus de cas : [tutoriel, section Troubleshooting](../TUTORIAL.md#troubleshooting
 | **Paramètre** | Réglage choisi avant l'entraînement. |
 | **Métrique** | Résultat mesuré. Peut évoluer par étape. |
 | **Artefact** | Fichier lié à un run : modèle, image, rapport. |
+| **Logged Model** | Un modèle sauvegardé par un run, avec son identifiant `m-...`. |
 | **Registre** | Catalogue des modèles retenus et de leurs versions. |
 | **Alias** | Étiquette mobile posée sur une version, comme `@champion`. |
+| **Trace** | Enregistrement complet d'une exécution d'un assistant LLM, étape par étape. |
 | **Bucket** | Espace de rangement de fichiers dans un stockage S3. |

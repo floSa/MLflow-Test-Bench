@@ -15,9 +15,11 @@
 5. [Guide pratique](#guide-pratique)
 6. [De la commande à l'interface](#de-la-commande-à-linterface)
 7. [Model Registry](#model-registry)
-8. [Comparaison des runs](#comparaison-des-runs-dans-mlflow)
-9. [Troubleshooting](#troubleshooting)
-10. [Ressources supplémentaires](#ressources-supplémentaires)
+8. [Logged Models et évaluation](#logged-models-et-évaluation)
+9. [GenAI : tracing et évaluation](#genai--tracing-et-évaluation)
+10. [Comparaison des runs](#comparaison-des-runs-dans-mlflow)
+11. [Troubleshooting](#troubleshooting)
+12. [Ressources supplémentaires](#ressources-supplémentaires)
 
 ---
 
@@ -63,7 +65,7 @@ Base de données relationnelle qui stocke toutes les **métadonnées légères**
 
 #### 2. SeaweedFS (Artifact Store)
 Serveur de stockage d'objets doté d'une passerelle compatible Amazon S3. Il stocke les **fichiers lourds** (Artefacts) :
-- Modèles sérialisés (`.pkl`, `.h5`)
+- Modèles sérialisés (`model.skops`)
 - Graphiques et images
 - Datasets
 - *Pourquoi ?* Simule un environnement cloud (AWS S3) en local. MLflow ne stocke pas les fichiers dans la base de données.
@@ -82,7 +84,7 @@ Environnement d'exécution isolé contenant Python et les librairies nécessaire
 
 On aurait pu partir d'une image prête à l'emploi comme `ghcr.io/mlflow/mlflow`. Construire la nôtre a deux intérêts ici :
 
-- **Contrôle** : on choisit chaque dépendance, dont le driver PostgreSQL (`psycopg2-binary`) et le client S3 (`boto3`) dont ce projet a besoin.
+- **Contrôle** : on choisit chaque dépendance, dont le driver PostgreSQL (`psycopg`) et le client S3 (`boto3`) dont ce projet a besoin.
 - **Apprentissage** : chaque étape est lisible (build multi-stage, utilisateur non-root, entrypoint, healthcheck).
 
 Le coût : les mises à jour sont à notre charge. L'image finale pèse environ 1 Go.
@@ -135,17 +137,14 @@ Le coût : les mises à jour sont à notre charge. L'image finale pèse environ 
 4. **Accéder à l'interface** :
    Ouvrez [http://localhost:5000](http://localhost:5000)
 
-5. **Regarder le premier entraînement** :
-   Le conteneur `runner` lance `sklearn_example.py` à son démarrage. Suivez-le avec :
-   ```bash
-   docker compose logs -f runner
-   ```
-
-6. **Relancer un entraînement** :
+5. **Lancer un premier entraînement** :
    ```bash
    docker compose exec runner python sklearn_example.py
    ```
-   Chaque exécution ajoute 4 runs et une nouvelle version du modèle `wine-classifier`.
+   Chaque exécution ajoute 4 runs et une nouvelle version du modèle `wine-classifier`. Rien ne s'entraîne au démarrage : un `docker compose up` ne crée pas de version et ne déplace pas l'alias `@champion`.
+
+6. **Choisir le mode de l'interface** :
+   En haut à gauche, un bouton bascule entre **GenAI**, affiché par défaut, et **Model training**. Les captures de ce tutoriel sont en mode **Model training**, sauf le chapitre GenAI. Le panneau **MLflow Assistant**, ouvert à la première visite, se ferme avec sa croix.
 
 ---
 
@@ -213,7 +212,7 @@ mlflow.log_artifact("config.yaml")
 mlflow.log_figure(fig, "confusion_matrix.png")
 
 # Logger un modèle scikit-learn
-mlflow.sklearn.log_model(model, "model")
+mlflow.sklearn.log_model(model, name="model")
 ```
 
 ---
@@ -285,13 +284,15 @@ Paramètres enregistrés : 19
 Métriques enregistrées : ['training_accuracy_score', 'training_f1_score', 'training_log_loss', 'training_precision_score', 'training_recall_score', 'training_roc_auc', 'training_score']
 ```
 
-**Dans l'interface** : les compteurs **Parameters (19)** et **Metrics (7)** correspondent à la sortie du terminal. L'autolog a aussi enregistré un dataset et le modèle.
+**Dans l'interface** : les compteurs **Metrics (7)** et **Parameters (19)** correspondent à la sortie du terminal. L'autolog a aussi enregistré un dataset et le modèle.
+
+Le terminal affiche un avertissement sur le format pickle : l'autolog sérialise en cloudpickle, alors que `log_model` utilise skops par défaut. Ne chargez un tel modèle que s'il vient d'une source de confiance.
 
 ![Run créé par l'autolog](documentation/images/04-run-autolog.png)
 
 ### Exemple 3 : Comparaison de modèles
 
-Le script [`examples/sklearn_example.py`](examples/sklearn_example.py) entraîne 4 modèles sur le dataset Wine, compare leurs performances et enregistre le meilleur dans le Model Registry.
+Le script [`examples/sklearn_example.py`](examples/sklearn_example.py) entraîne 4 modèles sur le dataset Wine, compare leurs performances et enregistre le meilleur dans le Model Registry. Chaque modèle est un `Pipeline` qui inclut le `StandardScaler`.
 
 ```bash
 docker compose exec runner python sklearn_example.py
@@ -301,15 +302,19 @@ Le terminal résume les performances et désigne le meilleur modèle :
 
 ```text
                      test_accuracy  f1_score   cv_mean
+Logistic Regression       0.972222   0.97197  0.993103
 Random Forest             1.000000   1.00000  0.986207
-Random Forest Large       1.000000   1.00000  0.979064
-Logistic Regression       0.972222   0.97197  0.985961
 SVM RBF                   0.972222   0.97197  0.986207
+Random Forest Large       1.000000   1.00000  0.979064
 
-🏆 Meilleur modèle: Random Forest
+🏆 Meilleur modèle: Logistic Regression
+   CV Score: 0.9931
+   Accuracy (test): 0.9722
 ```
 
-**Dans l'interface** : chaque modèle devient une ligne de l'expérience `comparaison-modeles`. Seul le meilleur porte `wine-classifier` dans la colonne Models.
+Le classement se fait sur la validation croisée (`cv_mean`), à score égal sur la plus faible dispersion (`cv_std`). Le jeu de test ne sert pas à choisir : il reste une estimation indépendante. Voilà pourquoi la Logistic Regression l'emporte malgré ses 0,97 sur le test, contre 1,00 pour les Random Forest.
+
+**Dans l'interface** : chaque modèle devient une ligne de l'expérience `comparaison-modeles`. Seul le meilleur porte `wine-classifier` dans la colonne Models, les autres affichent leur Logged Model `model`.
 
 ![Table des runs de l'expérience comparaison-modeles](documentation/images/01-table-des-runs.png)
 
@@ -339,7 +344,7 @@ Dataset wine_training : digest 4f1188a9, training
 Dataset wine_test : digest 0ef539ce, test
 ```
 
-**Dans l'interface** : **Datasets used** affiche `wine_training` et le digest `4f1188a9` du terminal. Le bouton `+1` déplie le second dataset.
+**Dans l'interface** : **Datasets** affiche `wine_training` et le digest `4f1188a9` du terminal. Le bouton `+1` déplie le second dataset.
 
 ![Datasets d'un run](documentation/images/05-run-datasets.png)
 
@@ -351,18 +356,22 @@ Chaque appel Python laisse une trace à un endroit précis de l'interface, et se
 
 | Appel Python | Où le voir sur `http://localhost:5000` | Stocké dans |
 |---|---|---|
-| `set_experiment("x")` | Page **Experiments**, liste de gauche | PostgreSQL |
-| `start_run(run_name="y")` | Une ligne dans la table des runs de l'expérience | PostgreSQL |
+| `set_experiment("x")` | Page **Experiments** | PostgreSQL |
+| `start_run(run_name="y")` | Une ligne dans **Runs**, page de l'expérience | PostgreSQL |
 | `log_param` | Run > **Overview** > Parameters | PostgreSQL |
 | `log_metric`, `log_metrics` | Run > **Overview** > Metrics ; courbes dans **Model metrics** | PostgreSQL |
+| `start_run(log_system_metrics=True)` | Run > **System metrics** | PostgreSQL |
 | `set_tag` | Run > **Overview** > Tags | PostgreSQL |
-| `log_input` | Run > **Overview** > Datasets used | PostgreSQL |
+| `log_input` | Run > **Overview** > Datasets | PostgreSQL |
 | `log_figure`, `log_artifact` | Run > **Artifacts** | SeaweedFS |
-| `sklearn.log_model` | Run > **Artifacts** > `model` ; Run > **Overview** > Logged models | SeaweedFS |
-| `register_model` | Page **Models** ; Run > **Overview** > Registered models | PostgreSQL (le fichier reste dans SeaweedFS) |
-| `set_registered_model_alias` | Page **Models**, colonne Aliased versions ; `wine-classifier`, colonne Aliases | PostgreSQL |
+| `sklearn.log_model` | Expérience > **Models** ; Run > **Overview** > Logged models | Fichiers : SeaweedFS. Fiche : PostgreSQL |
+| `register_model` | Page **Model registry** ; Run > **Overview** > Registered models | PostgreSQL (le fichier reste dans SeaweedFS) |
+| `set_registered_model_alias` | Page **Model registry**, colonne Aliased versions | PostgreSQL |
+| `models.evaluate` | Run > **Overview** > Metrics ; Run > **Artifacts** ; Expérience > **Models** | Métriques : PostgreSQL. Graphiques : SeaweedFS |
+| `@mlflow.trace`, `openai.autolog` | Mode GenAI > **Traces** | PostgreSQL |
+| `genai.evaluate` | Mode GenAI > **Evaluation runs** | PostgreSQL |
 
-La capture ci-dessous repère ces éléments sur un run de `sklearn_example.py` : (1) `log_input`, (2) `set_tag`, (3) `log_model`, (4) `register_model`, (5) `log_param`, (6) `log_metrics`.
+La capture ci-dessous repère ces éléments sur un run de `sklearn_example.py` : (1) `log_input`, (2) `set_tag`, (3) `register_model`, (4) `log_metrics`, (5) `log_param`, (6) `log_model`.
 
 ![Onglet Overview d'un run](documentation/images/03-run-overview.png)
 
@@ -374,19 +383,19 @@ L'onglet **Artifacts** montre les fichiers de `log_figure` et `log_artifact`. L'
 
 L'adresse `s3://mlflow-artifacts/1/<run_id>/artifacts/confusion_matrix.png` se lit directement dans l'interface du filer, sur `http://localhost:8888/buckets/mlflow-artifacts/`.
 
-Le premier niveau du bucket est l'identifiant de l'expérience. Seules les expériences ayant enregistré des fichiers y figurent : `basic_example.py` et `dataset_example.py` n'en écrivent aucun.
+Le premier niveau du bucket est l'identifiant de l'expérience. Seules les expériences ayant enregistré des fichiers y figurent : `basic_example.py` et `dataset_example.py` n'en écrivent aucun. `.uploads` est un dossier interne de SeaweedFS.
 
 ![Bucket mlflow-artifacts dans le filer](documentation/images/12-seaweedfs-bucket.png)
 
-Le niveau suivant est le Run ID :
+Le niveau suivant contient un dossier `models` pour les Logged Models (1), et un dossier par Run ID (2) :
 
 ![Dossiers des runs dans le filer](documentation/images/13-seaweedfs-runs.png)
 
-Puis viennent les fichiers de `log_figure` et `log_artifact` :
+Le dossier d'un run contient les fichiers de `log_figure` et `log_artifact` :
 
 ![Le fichier vu depuis le filer SeaweedFS](documentation/images/11-stockage-seaweedfs.png)
 
-Le dossier `model` contient ce qu'a écrit `sklearn.log_model`, dont `MLmodel` (1) et `model.pkl` (2) :
+Le dossier `models/<model_id>/artifacts/` contient ce qu'a écrit `sklearn.log_model`, dont `MLmodel` (1) et `model.skops` (2) :
 
 ![Contenu du dossier model](documentation/images/14-seaweedfs-modele.png)
 
@@ -401,12 +410,12 @@ docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.list" | weed shell -mast
 ```
 
 ```text
-  mlflow-artifacts	size:932136	chunk:43
+  mlflow-artifacts	size:17184168	logical:17184168	chunk:73
 ```
 
 ### Ce qui se passe à chaque appel
 
-Les métadonnées passent par le serveur MLflow. Les fichiers partent directement du script vers SeaweedFS, ce qui explique que le `runner` ait besoin des identifiants S3.
+Les métadonnées passent par le serveur MLflow. Les fichiers partent directement du script vers SeaweedFS, ce qui explique que le `runner` ait besoin des identifiants S3 (serveur lancé avec `--no-serve-artifacts`).
 
 ```mermaid
 sequenceDiagram
@@ -430,8 +439,6 @@ sequenceDiagram
 
 ---
 
----
-
 ## Model Registry
 
 ### Qu'est-ce que le Model Registry ?
@@ -444,19 +451,20 @@ Le **Model Registry** centralise les modèles validés et garde leur historique 
 > [!NOTE]
 > Les **stages** (`None`, `Staging`, `Production`, `Archived`) et `transition_model_version_stage` sont dépréciés depuis MLflow 2.9. Les aliases les remplacent, c'est pourquoi `sklearn_example.py` les utilise.
 
-**Dans l'interface** : la page **Models** liste les modèles et leurs aliases.
+**Dans l'interface** : la page **Model registry** liste les modèles et leurs aliases.
 
 ![Liste des modèles enregistrés](documentation/images/09-registre-des-modeles.png)
 
-Chaque version renvoie vers le run qui l'a produite (1) et affiche ses aliases (2).
+Chaque version renvoie vers le run (1) et le Logged Model (2) qui l'ont produite, et affiche ses aliases (3).
 
 ![Détail d'une version de modèle](documentation/images/10-version-du-modele.png)
 
 ### Enregistrer un modèle
 
 ```python
+# model_info : valeur renvoyée par mlflow.sklearn.log_model
 model_version = mlflow.register_model(
-    model_uri=f"runs:/{run_id}/model",
+    model_uri=model_info.model_uri,
     name="wine-classifier"
 )
 ```
@@ -484,8 +492,224 @@ model = mlflow.sklearn.load_model("models:/wine-classifier@champion")
 model = mlflow.sklearn.load_model("models:/wine-classifier/1")
 ```
 
+Le modèle enregistré est un `Pipeline` complet : il accepte directement des données brutes et les normalise lui-même.
+
+---
+
+## Logged Models et évaluation
+
+Script : [`examples/evaluation_example.py`](examples/evaluation_example.py)
+
+```bash
+docker compose exec runner python evaluation_example.py
+```
+
+Le script compare un modèle candidat à une référence naïve, et n'approuve le candidat que s'il respecte des seuils. Le terminal résume les trois étapes (extrait, sans les journaux de MLflow) :
+
+```text
+--- Évaluation ---
+reference : accuracy 0.3889, f1 0.2178
+candidat : accuracy 1.0000, f1 1.0000
+
+--- Seuils raisonnables ---
+Validation réussie
+
+--- Seuil impossible, pour voir un refus ---
+Validation refusée : Metric accuracy_score value threshold check failed: candidate model accuracy_score = 1.0, accuracy_score threshold = 1.01.
+
+--- Logged Models de l'expérience, par accuracy décroissante ---
+candidat : m-d0fc1241a4514929b026397a4c6932df, accuracy 1.0000, validation=approuve
+reference : m-89c6edc476654d6c93573550d27431fb, accuracy 0.3889, validation=-
+```
+
+### Logged Models
+
+Depuis MLflow 3, un modèle n'est plus un simple dossier dans les artefacts d'un run : `log_model` crée un **Logged Model**, avec son identifiant (`m-...`), ses métriques et ses fichiers.
+
+```python
+model_info = mlflow.sklearn.log_model(modele, name=nom, input_example=X.head(5),
+                                      skops_trusted_types=TYPES_SKOPS_DE_CONFIANCE)
+print(model_info.model_uri)  # models:/m-d0fc1241a4514929b026397a4c6932df
+```
+
+| Dans MLflow 2 | Dans MLflow 3 |
+|---|---|
+| `log_model(modele, artifact_path="model")` | `log_model(modele, name="model")` |
+| `runs:/<run_id>/model` | `model_info.model_uri`, soit `models:/<model_id>` |
+| Run > Artifacts > `model` | Expérience > **Models**, et Run > Overview > Logged models |
+| `s3://.../<run_id>/artifacts/model/` | `s3://.../models/<model_id>/artifacts/` |
+| Format `model.pkl` (cloudpickle) | Format `model.skops` |
+
+**skops** refuse de charger un type qu'il ne connaît pas. Le Random Forest contient `sklearn.tree._tree.Tree`, d'où `skops_trusted_types`. Sans ce paramètre, `log_model` échoue. Cette liste est lue dans le fichier `MLmodel` du modèle : charger un modèle reste donc une action de confiance, quel que soit le format.
+
+**Dans l'interface** : l'onglet **Models** de l'expérience liste les Logged Models (1), avec leurs métriques en colonnes (2).
+
+![Logged Models d'une expérience](documentation/images/16-logged-models.png)
+
+Chaque Logged Model garde ses métriques (1), rattachées au dataset qui a servi à les calculer (2).
+
+![Détail d'un Logged Model](documentation/images/17-logged-model.png)
+
+### Évaluation
+
+`mlflow.models.evaluate` calcule les métriques standard et produit des graphiques, à partir du modèle et d'un dataset :
+
+```python
+dataset_test = mlflow.data.from_pandas(df_test, source="sklearn.datasets.load_wine",
+                                       targets="target", name="wine_test")
+resultat = mlflow.models.evaluate(
+    model_info.model_uri,
+    data=dataset_test,
+    model_type="classifier",
+    evaluators="default",
+    evaluator_config={"log_explainer": False, "log_model_explainability": False},
+)
+print(resultat.metrics["accuracy_score"])
+```
+
+`evaluator_config` désactive ici les explications SHAP, car le paquet `shap` n'est pas installé.
+
+**Dans l'interface** : l'onglet **Artifacts** du run contient les graphiques (matrice de confusion, ROC, précision-rappel, calibration) et `per_class_metrics.csv`.
+
+![Graphiques produits par l'évaluation](documentation/images/18-graphiques-evaluation.png)
+
+### Validation par seuils
+
+`mlflow.validate_evaluation_results` lève une exception si le candidat ne respecte pas les seuils. C'est le contrôle à placer avant une promotion :
+
+```python
+from mlflow.models import MetricThreshold
+
+mlflow.validate_evaluation_results(
+    {"accuracy_score": MetricThreshold(
+        threshold=0.9,             # au moins 0,9 dans l'absolu
+        min_relative_change=0.05,  # et au moins 5 % de mieux que la référence
+        greater_is_better=True,
+    )},
+    candidat,
+    reference,
+)
+```
+
+> [!NOTE]
+> Le script note le résultat dans le tag `validation` du Logged Model. L'interface 3.17 n'affiche pas les tags des Logged Models : ils se relisent en Python, avec `search_logged_models`.
+
+### Métriques système
+
+`log_system_metrics=True` relève le CPU, la mémoire, le disque et le réseau pendant le run. Il faut le paquet `psutil`.
+
+```python
+# Toutes les secondes au lieu de 10 : ces runs ne durent que quelques secondes
+mlflow.set_system_metrics_sampling_interval(1)
+mlflow.set_system_metrics_samples_before_logging(1)
+
+with mlflow.start_run(run_name=nom, log_system_metrics=True):
+    ...
+```
+
+**Dans l'interface** : onglet **System metrics** du run.
+
+![Métriques système d'un run](documentation/images/19-metriques-systeme.png)
+
+---
+
+## GenAI : tracing et évaluation
+
+Script : [`examples/genai_example.py`](examples/genai_example.py)
+
+Un petit assistant répond à des questions sur le dataset Wine à partir de fiches. Le LLM tourne en local avec Ollama : aucune clé payante n'est nécessaire.
+
+> [!IMPORTANT]
+> Cet exemple a besoin d'un serveur Ollama, que ce projet ne fournit pas. Il a été testé avec le conteneur `ollama-central` sur le réseau Docker `llm-net` et le modèle `gemma4:e4b`. Il n'est pas lancé par la CI, faute d'Ollama. Avec un autre serveur, adaptez `OLLAMA_BASE_URL` et `OLLAMA_MODEL`.
+
+Reliez le runner au réseau d'Ollama, puis lancez le script. Le premier appel peut prendre une minute, le temps de charger le modèle :
+
+```bash
+docker network connect llm-net mlflow-runner
+```
+
+```bash
+docker compose exec -e OLLAMA_BASE_URL=http://ollama-central:11434/v1 runner python genai_example.py
+```
+
+La connexion réseau est à refaire si le conteneur `runner` est recréé.
+
+```text
+--- Une question, une trace ---
+Combien de classes contient le dataset Wine ?
+-> Le dataset Wine contient trois classes de vins : class_0, class_1 et class_2.
+Trace : tr-d3cf5db52e5bfce269d34adfa4e94cc1
+
+--- Évaluation sur le jeu de questions ---
+Run d'évaluation : f002718798b9412fb62ece18506c9e93
+contient_mot_cle/mean : 1.00
+correctness/mean : 1.00
+en_francais/mean : 1.00
+
+--- Détail par question ---
+{"question": "Combien de caractéristiques décrivent un vin ?"}
+-> "Chaque vin est décrit par 13 caractéristiques chimiques, dont l'alcool et le magnésium."
+   {'contient_mot_cle': True, 'en_francais': 'yes', 'correctness': 'yes'}
+```
+
+### Tracing
+
+Une **trace** enregistre une exécution complète de l'assistant. Elle se compose de **spans**, un par étape. Deux lignes suffisent :
+
+```python
+mlflow.openai.autolog()  # un span par appel au LLM : messages, réponse, jetons
+
+@mlflow.trace(span_type=SpanType.RETRIEVER)  # un span pour une fonction à vous
+def chercher_fiche(question):
+    ...
+```
+
+**Dans l'interface** : passez en mode **GenAI** en haut à gauche, puis ouvrez **Traces**. Chaque ligne associe une question (1) à sa réponse (2), avec sa durée et ses jetons.
+
+![Liste des traces](documentation/images/20-traces.png)
+
+Un clic ouvre le détail : la recherche de fiche (1) et l'appel au LLM (2), avec leurs entrées et sorties.
+
+![Détail d'une trace](documentation/images/21-detail-trace.png)
+
+Les spans sont gardés dans PostgreSQL : la table `spans` en contient 12 après une exécution, soit 3 pour chacune des 4 traces. MLflow peut aussi écrire un fichier `traces/<trace_id>/artifacts/traces.json` dans SeaweedFS : il est apparu pour une trace sur 4 lors d'une exécution, et pour aucune lors d'une autre. Il n'est donc pas surprenant de voir ou non un dossier pour cette expérience dans le bucket.
+
+### Évaluation
+
+`mlflow.genai.evaluate` exécute l'assistant sur un jeu de questions et note chaque réponse avec des **scorers** :
+
+```python
+@scorer
+def contient_mot_cle(outputs, expectations):  # critère en Python, sans LLM
+    return expectations["mot_cle"] in outputs
+
+resultat = mlflow.genai.evaluate(
+    data=QUESTIONS,
+    predict_fn=repondre,
+    scorers=[
+        contient_mot_cle,
+        Correctness(model=JUGE),  # faits attendus, notés par un LLM : le juge
+        Guidelines(name="en_francais", guidelines="La réponse doit être rédigée en français.", model=JUGE),
+    ],
+)
+```
+
+Ici le juge est le même modèle local que l'assistant, désigné par `openai:/gemma4:e4b`. Il passe par LiteLLM et l'API compatible OpenAI d'Ollama.
+
+**Dans l'interface** : **Evaluation runs** donne un score moyen par critère.
+
+![Runs d'évaluation GenAI](documentation/images/22-evaluation-genai.png)
+
+Un clic sur le run affiche chaque réponse (1) et ses notes (2).
+
+![Détail d'une évaluation](documentation/images/23-detail-evaluation.png)
+
 > [!WARNING]
-> Dans `sklearn_example.py`, le modèle a été entraîné sur des données normalisées et le `StandardScaler` n'est pas enregistré avec lui. Il faut donc lui donner des données normalisées de la même façon. En conditions réelles, enregistrez plutôt un `Pipeline` scikit-learn complet.
+> Un LLM ne donne pas toujours la même réponse. Dans la sortie ci-dessus, la première réponse écrit « trois » : elle est juste, mais `contient_mot_cle` la refuserait, car il cherche `3`. Lors d'un essai, ce critère est tombé à 0,67 alors que `correctness` restait à 1,00. Pour la même raison, un juge local n'a pas la fiabilité d'un jeu de tests : 3 questions montrent la mécanique, elles ne mesurent pas la qualité d'un assistant.
+
+### Non couvert
+
+L'interface 3.x propose aussi Sessions, Judges, Review, Datasets, Playground, Prompts, Agent versions, AI Gateway, MCP registry et MLflow Assistant. Ce tutoriel ne les couvre pas et ils n'ont pas été testés ici. L'évaluation en ligne des traces a besoin de l'exécuteur de tâches du serveur, désactivé par `MLFLOW_SERVER_ENABLE_JOB_EXECUTION` dans `docker-compose.yml` pour économiser la mémoire.
 
 ---
 
@@ -498,7 +722,7 @@ model = mlflow.sklearn.load_model("models:/wine-classifier/1")
 
 ![Sélection des runs et bouton Compare](documentation/images/02-selection-pour-comparer.png)
 
-3. Explorez les visualisations natives (Parallel Coordinates, Scatter Plot, Box Plot, Contour Plot)
+3. Explorez les visualisations natives (Parallel Coordinates, Scatter Plot, Box Plot, Contour Plot). Sur la capture, les axes ont été choisis à la main : `model_type`, `cv_mean` et `test_accuracy`.
 
 ![Page de comparaison des runs](documentation/images/08-comparaison.png)
 
@@ -552,9 +776,25 @@ chmod +x mlflow/entrypoint.sh
 ### Problème : L'interface MLflow est vide
 
 **Solution :**
-1. Vérifiez que vous avez exécuté un script d'exemple
-2. Rafraîchissez la page
-3. Sélectionnez la bonne expérience dans le menu déroulant
+1. Rien ne s'entraîne au démarrage : exécutez un script d'exemple
+2. Choisissez **Model training** en haut à gauche, le mode **GenAI** masque les runs
+3. Ouvrez la bonne expérience depuis **Experiments**
+
+### Problème : le serveur répond 403 à un script
+
+**Cause :** Depuis MLflow 3.5, le serveur refuse les en-têtes `Host` qu'il ne connaît pas.
+
+**Solution :** Ajoutez l'adresse utilisée par le client à `MLFLOW_SERVER_ALLOWED_HOSTS` dans `docker-compose.yml`.
+
+### Problème : "Detected out-of-date database schema"
+
+**Cause :** La base a été créée par une version plus ancienne de MLflow.
+
+**Solution :** Sauvegardez la base, puis lancez la migration avec PostgreSQL démarré :
+```bash
+docker compose run --rm --entrypoint sh mlflow -c 'mlflow db upgrade "$MLFLOW_BACKEND_STORE_URI"'
+```
+Le passage de MLflow 2.19 à 3.17 n'a pas eu besoin de cette commande : le serveur a migré la base seul au démarrage. Ce message n'a pas été rencontré ici. La commande a seulement été lancée sur une base déjà à jour, où elle n'a rien changé.
 
 ### Réinitialiser complètement
 

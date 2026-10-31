@@ -37,7 +37,7 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 
 | Service | Exposé à l'hôte ? | Port(s) | Justification |
 |---------|-------------------|---------|---------------|
-| `mlflow` | oui | 5000 | UI + API de tracking |
+| `mlflow` | oui, sur `127.0.0.1` | 5000 | UI + API de tracking |
 | `seaweedfs` | oui, sur `127.0.0.1` | 8333 (API S3), 8888 (filer), 9333 (cluster) | Accès aux artefacts et interfaces web |
 | `postgres` | **non** | 5432 (interne) | Accessible uniquement par `mlflow` via le réseau Docker |
 | `runner` | **non** | — | Exécution de scripts, aucun service à exposer |
@@ -48,9 +48,16 @@ réduit la surface d'attaque.
 
 > **Attention** : l'UI MLflow (`:5000`) et les interfaces SeaweedFS (`:8888`, `:9333`)
 > n'ont aucune authentification, et rien n'est chiffré. L'API S3 (`:8333`) refuse les requêtes anonymes
-> (403). MLflow est publié sur toutes les interfaces de l'hôte, les ports SeaweedFS
-> seulement sur `127.0.0.1`. Acceptable en local ; à placer derrière un reverse-proxy
-> authentifié + HTTPS si exposé au réseau.
+> (403). Tous ces ports sont publiés seulement sur `127.0.0.1`. Acceptable en local ; à
+> placer derrière un reverse-proxy authentifié + HTTPS si exposé au réseau.
+
+Depuis MLflow 3.5, le serveur refuse aussi les en-têtes `Host` inconnus, pour se protéger
+du DNS rebinding : une requête avec `Host: evil.example:5000` reçoit un 403.
+`MLFLOW_SERVER_ALLOWED_HOSTS` autorise `mlflow:5000`, l'adresse du serveur vue du `runner`,
+ainsi que `localhost` et `127.0.0.1`.
+
+**Télémétrie** : MLflow 3 envoie par défaut des statistiques d'usage à ses serveurs.
+`MLFLOW_DISABLE_TELEMETRY` la désactive pour le serveur et le `runner`.
 
 ---
 
@@ -63,25 +70,25 @@ Les deux images construites appliquent des bonnes pratiques :
 | Utilisateur non-root | `mlflow` (uid 1000) / `runner` (uid 1000) | `mlflow/Dockerfile`, `examples/Dockerfile` |
 | Build multi-stage | Étape `builder` séparée de l'image finale (surface réduite) | `mlflow/Dockerfile` |
 | Runtime minimal | `libpq5` + `curl` seulement dans l'image finale | `mlflow/Dockerfile` |
-| Healthchecks | `pg_isready`, `mc ready`, `curl /health` | `docker-compose.yml` |
+| Healthchecks | `pg_isready`, `wget /healthz`, `curl /health` | `docker-compose.yml` |
 | `restart: unless-stopped` | Résilience des services longs | `docker-compose.yml` |
 
 ---
 
 ## 4. Dépendances
 
-Le serveur MLflow épingle sa version (`mlflow==2.19.0`, `mlflow/Dockerfile`). Les
-dépendances des exemples ([`examples/requirements.txt`](../examples/requirements.txt))
-utilisent des bornes minimales (`>=`) et ne sont **pas** verrouillées par un lockfile.
+Le serveur et les exemples installent les versions exactes de leur `requirements.lock`,
+généré par `uv pip compile` depuis `requirements.txt`. Un `pip-audit` de ces deux fichiers
+ne remonte aucune vulnérabilité connue au 30 octobre 2026. Pour y arriver, `filelock` est
+imposé en version >= 4.2.1, ce qui redescend LiteLLM à 1.103.10.
 
-`chrislusf/seaweedfs:3.80` est épinglée sur une version précise ;
+`chrislusf/seaweedfs:4.51` est épinglée sur une version précise ;
 `postgres:15-alpine` est figé sur une majeure mais suit les correctifs.
 
-Audit possible des dépendances Python :
+Audit des dépendances, depuis la racine du dépôt :
 
 ```bash
-docker compose exec runner pip install pip-audit && \
-docker compose exec runner pip-audit
+uvx pip-audit --no-deps --disable-pip -r examples/requirements.lock
 ```
 
 ---
@@ -100,7 +107,16 @@ La persistance repose sur deux volumes Docker nommés :
 
 ---
 
-## 6. Risques connus (non traités)
+## 6. Charger un modèle
+
+Charger un modèle peut exécuter du code contenu dans ses fichiers, quel que soit le format.
+`skops`, le format par défaut, bloque les types inconnus, mais sa liste de types de confiance
+est lue dans le modèle lui-même. L'autolog utilise toujours cloudpickle. Ne chargez que des
+modèles dont vous connaissez l'origine.
+
+---
+
+## 7. Risques connus (non traités)
 
 Honnêteté : ce projet est un tutoriel local, plusieurs points ne sont pas durcis.
 
