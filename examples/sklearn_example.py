@@ -7,7 +7,8 @@ Ce script démontre l'utilisation complète de MLflow avec scikit-learn :
 - Comparaison de plusieurs modèles (runs)
 - Génération d'artefacts standardisés pour la comparaison
 - Enregistrement du meilleur modèle dans le Model Registry
-- Attribution de l'alias "champion" au meilleur modèle
+- Attribution de l'alias "challenger" au meilleur modèle : c'est un candidat,
+  promotion_example.py décide ensuite s'il devient "champion"
 
 Prérequis:
 ---------
@@ -143,13 +144,14 @@ def charger_donnees():
     # --------------------------------------------------------------------
     # Étape 1 : Chargement du dataset
     # --------------------------------------------------------------------
-    # load_wine() retourne un objet Bunch avec :
-    # - data : array numpy des features (178, 13)
-    # - target : array numpy des labels (178,)
+    # load_wine(as_frame=True) retourne un objet Bunch avec :
+    # - data : DataFrame des features (178, 13). Les noms de colonnes entrent
+    #   dans la signature du modèle : l'API de service les vérifiera
+    # - target : Series des labels (178,)
     # - feature_names : noms des 13 features
     # - target_names : noms des 3 classes
-    wine = load_wine()
-    X, y = wine.data, wine.target
+    wine = load_wine(as_frame=True)
+    X, y = wine.data, wine.target.to_numpy()
     feature_names = wine.feature_names
     target_names = wine.target_names
     
@@ -429,7 +431,7 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         model_info = mlflow.sklearn.log_model(
             modele,
             name="model",
-            input_example=X_train[:5],  # Exemple pour inférer la signature
+            input_example=X_train.head(5),  # Exemple pour inférer la signature
             skops_trusted_types=TYPES_SKOPS_DE_CONFIANCE
         )
         
@@ -599,8 +601,8 @@ def enregistrer_meilleur_modele(model_uri, nom_modele):
        - Historique complet des modèles
     
     2. ALIAS : Étiquette mobile posée sur une version
-       - @champion : le modèle de référence actuel
-       - @challenger : un candidat à évaluer
+       - @champion : le modèle de référence actuel, posé par promotion_example.py
+       - @challenger : un candidat à évaluer, posé ici
        Remplacent les stages (None/Staging/Production/Archived), dépréciés
        depuis MLflow 2.9
     
@@ -658,23 +660,23 @@ def enregistrer_meilleur_modele(model_uri, nom_modele):
     )
     
     # ========================================================================
-    # ATTRIBUTION DE L'ALIAS "CHAMPION"
+    # ATTRIBUTION DE L'ALIAS "CHALLENGER"
     # ========================================================================
     # set_registered_model_alias() pose l'alias sur cette version
     #
     # Un alias ne désigne qu'une seule version à la fois : il quitte
     # automatiquement la version précédente, qui reste disponible
     
-    print("   🚀 Attribution de l'alias 'champion'...")
+    print("   🚀 Attribution de l'alias 'challenger'...")
     client.set_registered_model_alias(
         name=registry_name,
-        alias="champion",
+        alias="challenger",
         version=model_version.version
     )
     
-    print(f"   ✅ Modèle '{registry_name}' v{model_version.version} désormais @champion!")
-    print("\n   💡 Pour charger ce modèle:")
-    print(f"      model = mlflow.sklearn.load_model('models:/{registry_name}@champion')")
+    print(f"   ✅ Modèle '{registry_name}' v{model_version.version} désormais @challenger!")
+    print("\n   💡 Pour le promouvoir s'il passe le contrôle:")
+    print("      docker compose exec runner python promotion_example.py")
     
     return model_version
 
@@ -703,8 +705,8 @@ def demo_chargement_modele(X_test, y_test, target_names):
     
     registry_name = "wine-classifier"
     
-    # Chargement de la version portant l'alias "champion"
-    model_uri = f"models:/{registry_name}@champion"
+    # Chargement de la version portant l'alias "challenger"
+    model_uri = f"models:/{registry_name}@challenger"
     print(f"   🔄 Chargement depuis: {model_uri}")
     
     model = mlflow.sklearn.load_model(model_uri)

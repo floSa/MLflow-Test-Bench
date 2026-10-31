@@ -3,7 +3,7 @@
 # Environnement Python isolé avec venv
 # =========================================
 
-FROM python:3.12-slim
+FROM python:3.12-slim AS base
 
 # Métadonnées de l'image
 LABEL maintainer="Florian"
@@ -40,3 +40,11 @@ USER runner
 
 # Commande par défaut - garde le conteneur actif
 CMD ["tail", "-f", "/dev/null"]
+
+# Image pour le deep learning : le runner, plus PyTorch en version CPU
+FROM base AS torch
+COPY requirements-torch.lock .
+RUN pip install -r requirements-torch.lock
+
+# Image par défaut, en dernier : le runner seul
+FROM base AS runner

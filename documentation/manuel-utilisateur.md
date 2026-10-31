@@ -34,9 +34,11 @@ proche de la production sur son poste.
 | PostgreSQL | Garde les paramètres, les métriques et le registre | Interne |
 | SeaweedFS | Garde les fichiers : modèles, images, rapports | http://localhost:8888/buckets/mlflow-artifacts/ et http://localhost:9333 |
 | Runner | Exécute les scripts Python d'exemple | Interne |
+| API de prédiction | Répond avec le modèle de référence, à la demande | http://localhost:5001 |
 
-**Ce que ce n'est pas :** un déploiement de production. Il n'y a ni authentification sur
-MLflow, ni chiffrement. Voir [SECURITY.md](SECURITY.md).
+**Ce que ce n'est pas :** un déploiement de production. Le projet montre tout le parcours
+d'un modèle, jusqu'à l'API, mais il n'y a ni authentification ni chiffrement. Voir
+[SECURITY.md](SECURITY.md).
 
 ---
 
@@ -81,7 +83,14 @@ Wine, en moins d'une minute :
 docker compose exec runner python sklearn_example.py
 ```
 
-**5. Ouvrir http://localhost:5000.** En haut à gauche, un bouton bascule entre **GenAI**,
+**5. Désigner le modèle de référence.** Le script ne le fait que si le modèle réussit le
+contrôle sur le jeu de test :
+
+```bash
+docker compose exec runner python promotion_example.py
+```
+
+**6. Ouvrir http://localhost:5000.** En haut à gauche, un bouton bascule entre **GenAI**,
 affiché par défaut, et **Model training** : choisissez **Model training**. Le panneau
 **MLflow Assistant**, ouvert à la première visite, se ferme avec sa croix.
 
@@ -138,7 +147,8 @@ Le menu **Model registry** liste les modèles retenus.
 ![Liste des modèles enregistrés](images/09-registre-des-modeles.png)
 
 1. **Le modèle** : un clic ouvre la liste de ses versions.
-2. **L'alias** `@champion` : il désigne la version de référence.
+2. **Les alias** : `@challenger` désigne le dernier candidat, `@champion` la version de
+   référence. Le bouton `+1` signale qu'un autre alias existe.
 
 Chaque version renvoie vers le run qui l'a produite :
 
@@ -146,7 +156,8 @@ Chaque version renvoie vers le run qui l'a produite :
 
 1. **Source Run** : le run d'origine, pour retrouver ses réglages et ses données.
 2. **Source Model** : le Logged Model, l'objet qui porte les fichiers du modèle.
-3. **Aliases** : le crayon permet de déplacer l'alias depuis l'interface.
+3. **Aliases** : le crayon permet de déplacer l'alias depuis l'interface, sans aucun contrôle.
+   Plus bas, les **Tags** donnent la décision du contrôle.
 
 ### Le stockage
 
@@ -200,7 +211,7 @@ docker compose exec -T seaweedfs sh -c 'echo "s3.bucket.list" | weed shell -mast
 ```
 
 ```text
-  mlflow-artifacts	size:17184168	logical:17184168	chunk:73
+  mlflow-artifacts	size:18922424	logical:18922424	chunk:183
 ```
 
 > Ces interfaces n'ont pas d'authentification, et le filer permet de modifier les
@@ -231,7 +242,7 @@ docker compose exec runner python sklearn_example.py
 ```
 
 Chaque exécution ajoute 4 runs et une nouvelle version de `wine-classifier`, qui reçoit
-l'alias `@champion`. Le terminal résume les performances :
+l'alias `@challenger`. Le terminal résume les performances :
 
 ```text
                      test_accuracy  f1_score   cv_mean
@@ -246,6 +257,52 @@ Random Forest Large       1.000000   1.00000  0.979064
 Le meilleur modèle est celui qui a le meilleur score en validation croisée (`cv_mean`), pas
 celui qui a le meilleur score sur le jeu de test.
 
+### Promouvoir un modèle
+
+Un nouvel entraînement ne remplace jamais le modèle de référence. Ce script évalue le
+candidat et le compare au modèle en place :
+
+```bash
+docker compose exec runner python promotion_example.py
+```
+
+Il exige au moins 0,9 d'accuracy, et pas moins que le modèle en place. Pour voir un refus,
+`--modele-degrade` propose un modèle volontairement mauvais :
+
+```bash
+docker compose exec runner python promotion_example.py --modele-degrade
+```
+
+```text
+@challenger : version 2, validation=refuse
+@champion : version 1, validation=approuve
+```
+
+![Versions et alias de wine-classifier](images/24-versions-et-alias.png)
+
+1. **`@champion`** reste sur la version 1.
+2. **`@challenger`** est sur la version refusée. La colonne **Tags** donne la décision.
+
+### Interroger le modèle par une API
+
+```bash
+docker compose --profile serving up -d --wait model-server
+```
+
+```bash
+curl -X POST http://localhost:5001/invocations -H 'Content-Type: application/json' -d '{"dataframe_records":[{"alcohol":14.2,"malic_acid":1.7,"ash":2.4,"alcalinity_of_ash":15.6,"magnesium":127,"total_phenols":2.8,"flavanoids":3.06,"nonflavanoid_phenols":0.28,"proanthocyanins":2.29,"color_intensity":5.64,"hue":1.04,"od280/od315_of_diluted_wines":3.92,"proline":1065}]}'
+```
+
+```text
+{"predictions": [0]}
+```
+
+Le service lit l'alias à son démarrage. Après une promotion, redémarrez-le :
+
+```bash
+docker compose --profile serving restart model-server
+```
+
 ### Essayer les autres exemples
 
 | Commande | Ce que ça montre | Où regarder |
@@ -254,9 +311,14 @@ celui qui a le meilleur score sur le jeu de test.
 | `docker compose exec runner python autolog_example.py` | Enregistrement automatique | Expérience `autolog-demo` |
 | `docker compose exec runner python dataset_example.py` | Traçabilité des données | Expérience `dataset-demo` |
 | `docker compose exec runner python evaluation_example.py` | Évaluation, contrôle par seuils, CPU et mémoire | Expérience `evaluation-modeles`, onglet **Models** |
+| `docker compose exec runner python recherche_example.py` | Recherche d'hyperparamètres, runs imbriqués | Expérience `recherche-demo` |
+| `docker compose exec runner python images_example.py` | Matrice de confusion à chaque étape, tableau d'erreurs | Expérience `images-demo`, onglet **Model metrics** du run |
+| `docker compose exec runner python xgboost_example.py` | XGBoost, le même parcours | Expérience `xgboost-demo`, menu **Model registry** |
+| `docker compose exec runner python pyfunc_example.py` | Un modèle avec du code maison | Menu **Model registry**, `wine-classifier-explique` |
 
-Un dernier exemple, `genai_example.py`, trace et évalue un assistant LLM. Il a besoin d'un
-serveur Ollama : voir [le tutoriel](../TUTORIAL.md#genai--tracing-et-évaluation).
+Deux exemples demandent une préparation : `pytorch_example.py` a besoin de sa
+[propre image](../TUTORIAL.md#pytorch), plus lourde, et `genai_example.py` d'un
+[serveur Ollama](../TUTORIAL.md#genai--du-prompt-au-service).
 
 ### Recharger le modèle de référence
 
@@ -277,8 +339,10 @@ en ligne de commande. Le numéro de version se passe entre guillemets :
 docker compose exec runner python -c "from mlflow import MlflowClient; MlflowClient().set_registered_model_alias('wine-classifier', 'champion', '1')"
 ```
 
-Le code qui charge `@champion` utilisera cette version, sans autre changement. Le choix
-tient après un redémarrage : seul un nouveau `sklearn_example.py` déplace l'alias.
+Le code qui charge `@champion` utilisera cette version, sans autre changement. L'API s'y
+met à son prochain redémarrage. Le choix tient après un redémarrage de la stack : seul
+`promotion_example.py` déplace ensuite l'alias. Il garde aussi l'ancien champion sous
+`@precedent`.
 
 ---
 
@@ -293,7 +357,7 @@ docker compose logs -f mlflow
 **Arrêter en gardant les données :**
 
 ```bash
-docker compose down
+docker compose --profile serving --profile deep down
 ```
 
 Au prochain `docker compose up -d`, vous retrouvez vos données telles quelles.
@@ -301,7 +365,7 @@ Au prochain `docker compose up -d`, vous retrouvez vos données telles quelles.
 **Tout effacer**, y compris les runs et les modèles :
 
 ```bash
-docker compose down -v
+docker compose --profile serving --profile deep down -v
 ```
 
 **Sauvegarder les métadonnées :**
@@ -367,6 +431,9 @@ réentraînez-le plutôt que de vous y fier.
 |---|---|
 | `The "S3_ACCESS_KEY" variable is not set` | Votre `.env` date d'avant SeaweedFS. Recréez-le depuis `.env.example`. |
 | « Connection refused » sur le port 5000 | Le serveur démarre encore. Vérifiez avec `docker compose ps` et attendez `healthy`. |
+| « port is already allocated » au démarrage | Un autre programme utilise le port 5000. Ajoutez `MLFLOW_PORT=15000` à `.env` et ouvrez http://localhost:15000. |
+| `model-server` reste `unhealthy` | Aucun modèle ne porte `@champion` : lancez `sklearn_example.py`, puis `promotion_example.py`. |
+| L'API répond encore avec l'ancien modèle | Elle lit l'alias à son démarrage : `docker compose --profile serving restart model-server`. |
 | L'interface est vide | Rien ne s'entraîne au démarrage : lancez `docker compose exec runner python sklearn_example.py`. |
 | Je ne vois ni **Runs** ni **Models** | L'interface est en mode **GenAI** : choisissez **Model training** en haut à gauche. |
 | Un lien du terminal commence par `http://mlflow:5000` | Remplacez `mlflow` par `localhost` dans le navigateur. |
@@ -388,5 +455,8 @@ Plus de cas : [tutoriel, section Troubleshooting](../TUTORIAL.md#troubleshooting
 | **Logged Model** | Un modèle sauvegardé par un run, avec son identifiant `m-...`. |
 | **Registre** | Catalogue des modèles retenus et de leurs versions. |
 | **Alias** | Étiquette mobile posée sur une version, comme `@champion`. |
+| **Champion, challenger** | Le modèle de référence, et le candidat qui peut le remplacer. |
+| **Signature** | Les colonnes et les types attendus par un modèle. L'API refuse ce qui ne les respecte pas. |
+| **Prompt** | Le texte d'instructions d'un LLM, versionné comme un modèle. |
 | **Trace** | Enregistrement complet d'une exécution d'un assistant LLM, étape par étape. |
 | **Bucket** | Espace de rangement de fichiers dans un stockage S3. |

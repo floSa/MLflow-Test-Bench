@@ -18,7 +18,8 @@ sécurité, voir [SECURITY.md](SECURITY.md).
 ## 2. Services / Composants
 
 Le `docker compose up` orchestre **5 services** (`seaweedfs-setup` est éphémère : il crée le
-bucket au démarrage puis s'arrête).
+bucket au démarrage puis s'arrête). **2 services** de plus démarrent à la demande, avec leur
+profil Docker Compose.
 
 | Service | Image / Build | Port interne | Port hôte | Rôle |
 |---|---|---|---|---|
@@ -27,6 +28,8 @@ bucket au démarrage puis s'arrête).
 | `seaweedfs` | `chrislusf/seaweedfs:4.51` | 8333 / 8888 / 9333 | 8333 / 8888 / 9333 (`127.0.0.1`) | Artifact store S3 + interfaces web |
 | `seaweedfs-setup` | `chrislusf/seaweedfs:4.51` | — | — | Crée le bucket `mlflow-artifacts` puis s'arrête |
 | `runner` | build [`./examples`](../examples/Dockerfile) (Python 3.12) | — | *(non exposé)* | Environnement d'exécution des exemples |
+| `model-server` | même image que `runner`, profil `serving` | 8080 | 5001 (`127.0.0.1`) | API de prédiction : `mlflow models serve` sur `@champion` |
+| `runner-torch` | build [`./examples`](../examples/Dockerfile), cible `torch`, profil `deep` | — | *(non exposé)* | Le runner avec PyTorch en version CPU |
 
 ## 3. Stack technologique
 
@@ -40,6 +43,7 @@ Versions lues dans le projet (`mlflow/requirements.txt`, `examples/requirements.
 | Backend store | PostgreSQL | 15-alpine |
 | Artifact store | SeaweedFS | 4.51 |
 | ML & données (exemples) | scikit-learn / pandas / numpy | >= 1.6 et <= 1.9.1 / >= 2.0 / >= 1.24 |
+| Autres frameworks (exemples) | xgboost-cpu / PyTorch CPU | >= 2.1.2 et <= 3.4.1 / 2.14.0 |
 | GenAI (exemple Ollama) | openai / litellm | >= 1.0 / >= 1.0 |
 | Visualisation (exemples) | matplotlib | >= 3.7 |
 | Client S3 | boto3 | >= 1.28 |
@@ -61,6 +65,17 @@ Parcours d'un entraînement lancé depuis le `runner` :
 4. L'utilisateur consulte les runs via l'**UI MLflow** sur `http://localhost:5000` ; le
    serveur lit les artefacts dans SeaweedFS pour les afficher.
 
+Parcours d'un modèle jusqu'à la production :
+
+1. `sklearn_example.py` enregistre le meilleur modèle dans le registre et pose `@challenger`.
+2. `promotion_example.py` l'évalue sur le jeu de test, le compare à `@champion`, puis déplace
+   l'alias ou non. La décision et le run d'évaluation vont dans les tags de la version.
+3. Au démarrage, `model-server` demande à `mlflow` la version qui porte l'alias, télécharge
+   ses fichiers depuis SeaweedFS, puis répond seul sur `/invocations`. Une fois démarré, il
+   a continué de prédire avec `mlflow` et `seaweedfs` arrêtés.
+4. Une image autonome, générée par `mlflow models generate-dockerfile`, embarque le modèle et
+   n'a plus besoin de la stack.
+
 ```mermaid
 flowchart TD
   user[Utilisateur] -->|Navigateur| ui[MLflow UI :5000]
@@ -70,8 +85,11 @@ flowchart TD
     server -->|métadonnées| db[(PostgreSQL :5432)]
     server -->|lecture des artefacts| seaweedfs
     setup[seaweedfs-setup] -. crée le bucket .-> seaweedfs
+    modelserver[model-server :5001] -->|alias du modèle| server
+    modelserver -->|fichiers du modèle| seaweedfs
   end
   ui --- server
+  user -->|requêtes de prédiction| modelserver
 ```
 
 Séquence détaillée d'un appel, et correspondance entre appels Python et interface :
@@ -83,7 +101,7 @@ Séquence détaillée d'un appel, et correspondance entre appels Python et inter
 
 | Réseau | Services | Rôle |
 |---|---|---|
-| `mlflow-network` (bridge) | tous | Isolation ; seuls `mlflow` (5000) et `seaweedfs` (8333/8888/9333) sont publiés sur l'hôte, sur `127.0.0.1` |
+| `mlflow-network` (bridge) | tous | Isolation ; seuls `mlflow` (5000), `seaweedfs` (8333/8888/9333) et `model-server` (5001) sont publiés sur l'hôte, sur `127.0.0.1` |
 
 | Volume | Monté par | Contenu |
 |---|---|---|
@@ -115,6 +133,16 @@ Les deux stores sont des volumes Docker **nommés** : les données survivent à
 - **Runner sans entraînement au démarrage** *plutôt qu'*un exemple lancé à chaque `up`,
   *parce qu'*un redémarrage ne doit ni créer de version ni déplacer l'alias `@champion`.
   *Limite* : un premier `exec` est nécessaire pour remplir l'interface.
+- **Promotion séparée de l'entraînement** *plutôt qu'*un alias posé à la fin de chaque
+  entraînement, *parce qu'*un modèle moins bon ne doit jamais remplacer le champion par
+  simple réexécution. *Limite* : une commande de plus dans le parcours.
+- **`model-server` et `runner-torch` dans des profils** *plutôt que* démarrés par défaut,
+  *parce que* le premier échoue tant qu'aucun modèle n'est promu, et que le second ajoute
+  900 Mo d'image. *Limite* : `docker compose down` doit nommer ces profils pour les arrêter.
+- **Service sur l'image du runner, `--env-manager local`** *plutôt qu'*un environnement recréé
+  par modèle, *parce que* le démarrage prend environ 10 secondes et que les dépendances restent
+  verrouillées. *Limite* : tous les modèles servis partagent ces dépendances ; l'image autonome
+  lève cette limite.
 - **Bucket créé par un conteneur `seaweedfs-setup` éphémère** *plutôt que* configuration
   manuelle, *parce que* SeaweedFS démarre vide et l'automatisation évite une étape à chaque
   lancement.
@@ -141,5 +169,6 @@ Détail complet et risques connus : [SECURITY.md](SECURITY.md).
 |---|---|---|
 | Auth UI MLflow | Aucune (`:5000` sur `127.0.0.1`) | Reverse-proxy authentifié + HTTPS si exposé |
 | Interfaces SeaweedFS | Aucune authentification (`:8888` et `:9333` sur `127.0.0.1`) | Ne pas publier ces ports hors local |
-| GenAI | Ollama hors de ce projet, exemple absent de la CI | Tester avec un autre serveur compatible OpenAI si besoin |
+| GenAI | Ollama hors de ce projet ; la CI vérifie la mécanique avec un faux LLM, pas la qualité | Tester avec un autre serveur compatible OpenAI si besoin |
+| API de prédiction | Aucune authentification (`:5001` sur `127.0.0.1`), un seul conteneur, prédictions non journalisées | Reverse-proxy authentifié, plusieurs réplicas, surveillance de la dérive |
 | Secrets | Une seule identité S3, avec les droits `Admin` | Séparer écriture et lecture, comme le permet le fichier d'identités |

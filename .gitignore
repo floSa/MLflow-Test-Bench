@@ -1,6 +1,9 @@
 # Ignorer le fichier .env contenant les secrets
 .env
 
+# Image autonome d'un modèle, générée par mlflow models generate-dockerfile
+image-champion/
+
 # Données persistantes (gérées par Docker volumes)
 data/
 

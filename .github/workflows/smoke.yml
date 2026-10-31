@@ -8,7 +8,7 @@ on:
 jobs:
   smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
 
@@ -20,11 +20,62 @@ jobs:
       - name: Lancer les exemples
         run: |
           docker compose exec -T runner python sklearn_example.py
+          docker compose exec -T runner python promotion_example.py
           docker compose exec -T runner python basic_example.py
           docker compose exec -T runner python autolog_example.py
           docker compose exec -T runner python dataset_example.py
           docker compose exec -T runner python evaluation_example.py
+          docker compose exec -T runner python recherche_example.py
+          docker compose exec -T runner python images_example.py
+          docker compose exec -T runner python pyfunc_example.py
+          docker compose exec -T runner python xgboost_example.py
+          docker compose exec -T runner python promotion_example.py --modele wine-xgboost
+      
+      - name: Lancer l'exemple PyTorch
+        run: |
+          docker compose --profile deep up -d --build runner-torch
+          docker compose exec -T runner-torch python pytorch_example.py
+      
+      # Un faux LLM vérifie la mécanique, pas la qualité : voir examples/faux_llm.py
+      - name: Lancer le parcours GenAI
+        run: |
+          docker compose exec -d runner python faux_llm.py
+          sleep 2
+          docker compose exec -T -e OLLAMA_BASE_URL=http://localhost:11434/v1 runner python genai_example.py
+          curl -sf "http://localhost:5000/api/2.0/mlflow/registered-models/alias?name=assistant-wine&alias=champion"
 
+      - name: Vérifier qu'un modèle mauvais ne devient pas champion
+        run: |
+          champion() { curl -sf "http://localhost:5000/api/2.0/mlflow/registered-models/alias?name=wine-classifier&alias=champion" | python3 -c "import json,sys; print(json.load(sys.stdin)['model_version']['version'])"; }
+          AVANT=$(champion)
+          docker compose exec -T runner python promotion_example.py --modele-degrade
+          test "$(champion)" = "$AVANT"
+      
+      - name: Servir le modèle et l'interroger
+        run: |
+          docker compose --profile serving up -d --wait model-server
+          docker compose exec -T runner python serving_example.py
+          curl -sf -X POST http://localhost:5001/invocations -H 'Content-Type: application/json' -d @- <<'JSON'
+          {"dataframe_records":[{"alcohol":14.2,"malic_acid":1.7,"ash":2.4,"alcalinity_of_ash":15.6,"magnesium":127,"total_phenols":2.8,"flavanoids":3.06,"nonflavanoid_phenols":0.28,"proanthocyanins":2.29,"color_intensity":5.64,"hue":1.04,"od280/od315_of_diluted_wines":3.92,"proline":1065}]}
+          JSON
+      
+      - name: Servir les autres types de modèles avec la même API
+        run: |
+          for modele in wine-xgboost wine-classifier-explique; do
+            MODELE_SERVI=models:/$modele@champion docker compose --profile serving up -d --wait model-server
+            curl -sf -X POST http://localhost:5001/invocations -H 'Content-Type: application/json' -d @- <<'JSON'
+          {"dataframe_records":[{"alcohol":14.2,"malic_acid":1.7,"ash":2.4,"alcalinity_of_ash":15.6,"magnesium":127,"total_phenols":2.8,"flavanoids":3.06,"nonflavanoid_phenols":0.28,"proanthocyanins":2.29,"color_intensity":5.64,"hue":1.04,"od280/od315_of_diluted_wines":3.92,"proline":1065}]}
+          JSON
+          done
+      
+      - name: Construire et lancer l'image autonome du modèle
+        run: |
+          docker compose exec -T runner mlflow models generate-dockerfile -m models:/wine-classifier@champion -d /tmp/image-champion --env-manager local
+          docker cp mlflow-runner:/tmp/image-champion .
+          docker build -t wine-classifier:champion image-champion
+          docker run -d --name wine-autonome -p 127.0.0.1:5002:8080 wine-classifier:champion
+          timeout 60 sh -c 'until curl -sf http://localhost:5002/ping; do sleep 2; done'
+      
       - name: Vérifier la lecture d'un artefact par le serveur
         run: |
           RUN_ID=$(curl -sf "http://localhost:5000/api/2.0/mlflow/registered-models/alias?name=wine-classifier&alias=champion" | python3 -c "import json,sys; print(json.load(sys.stdin)['model_version']['run_id'])")
@@ -32,4 +83,4 @@ jobs:
 
       - name: Journaux en cas d'échec
         if: failure()
-        run: docker compose logs --tail 100
+        run: docker compose --profile serving --profile deep logs --tail 100

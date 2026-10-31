@@ -9,17 +9,21 @@ capture_screenshots.py - Régénère les captures de la documentation
 Prérequis:
 ---------
 1. La stack tourne : docker compose up -d
+   Pour les captures PyTorch et GenAI, lancer d'abord pytorch_example.py et genai_example.py
 2. Chromium est installé : uv run --with playwright playwright install chromium
 
 Exécution:
 ---------
 uv run scripts/capture_screenshots.py
 
+Si l'interface n'est pas sur le port 5000 : MLFLOW_UI=http://localhost:15000 uv run ...
+
 Les images sont écrites dans documentation/images/. Les pastilles numérotées
 renvoient aux légendes du tutoriel et du manuel utilisateur.
 """
 
 import json
+import os
 import subprocess
 import time
 import urllib.parse
@@ -28,7 +32,7 @@ from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
-MLFLOW = "http://localhost:5000"
+MLFLOW = os.getenv("MLFLOW_UI", "http://localhost:5000")
 FILER = "http://127.0.0.1:8888"
 MASTER = "http://127.0.0.1:9333"
 IMAGES = Path(__file__).resolve().parent.parent / "documentation" / "images"
@@ -38,10 +42,16 @@ EXEMPLES = {
     "autolog-demo": "autolog_example.py",
     "dataset-demo": "dataset_example.py",
     "evaluation-modeles": "evaluation_example.py",
+    "promotion-modeles": "promotion_example.py",
+    "recherche-demo": "recherche_example.py",
+    "images-demo": "images_example.py",
+    "pyfunc-demo": "pyfunc_example.py",
+    "xgboost-demo": "xgboost_example.py",
 }
 
 # Interface en mode "Model training", sans le panneau de l'assistant qui s'ouvre
-# à la première visite ; genai_example.py a besoin d'Ollama et se lance à part
+# à la première visite ; pytorch_example.py a besoin de son image, et
+# genai_example.py d'Ollama : ils se lancent à part
 PREFERENCES = """() => {
     localStorage.setItem('mlflow.workflowType_v1', '"machine_learning"');
     localStorage.setItem('mlflow.assistant.fab.autoOpenedOnFirstLoad_v1', 'true');
@@ -107,6 +117,28 @@ def fermer_promotion(page):
     page.wait_for_timeout(500)
 
 
+def deplier_parent(pg):
+    """Déplie le run parent pour montrer ses runs enfants."""
+    pg.locator("button[aria-label*='xpand'], .ag-row [data-testid*='expand'], .ag-row button").first.click()
+    pg.wait_for_timeout(800)
+
+
+def agrandir_image(pg):
+    """Ouvre le graphique d'images en plein écran, à la dernière étape, puis l'image."""
+    # L'icône plein écran suit le titre du graphique ; elle n'a pas de nom accessible
+    titre = pg.get_by_text("matrice_confusion", exact=True).first.bounding_box()
+    pg.mouse.click(titre["x"] + titre["width"] + 16, titre["y"] + 16)
+    pg.wait_for_timeout(1500)
+    fenetre = pg.get_by_role("dialog")
+    # Le curseur ne réagit qu'à la souris : un clic au bout de son rail, avant le champ
+    poignee = fenetre.get_by_role("slider").bounding_box()
+    champ = fenetre.locator("input").last.bounding_box()
+    pg.mouse.click(champ["x"] - 28, poignee["y"] + poignee["height"] / 2)
+    pg.wait_for_timeout(2500)
+    fenetre.locator("img").first.click()
+    pg.wait_for_timeout(2000)
+
+
 def main():
     preparer_donnees()
     IMAGES.mkdir(parents=True, exist_ok=True)
@@ -133,9 +165,9 @@ def main():
             lambda pg: pg.get_by_role("link", name="comparaison-modeles").first,
             lambda pg: pg.get_by_role("link", name="Random Forest Large"),
             lambda pg: pg.get_by_text("wine_training_data").first,
-            lambda pg: pg.get_by_role("link", name="wine-classifier"),
+            lambda pg: pg.get_by_role("link", name="wine-classifier").first,
         ])
-
+        
         def selectionner(pg):
             lignes = pg.locator(".ag-row .ag-checkbox-input")
             for i in range(lignes.count()):
@@ -193,8 +225,8 @@ def main():
         ], attente=5000, avant=axes_parlants)
         page.set_viewport_size({"width": 1440, "height": 760})
         capturer(page, f"{MLFLOW}/#/models", "09-registre-des-modeles", [
-            lambda pg: pg.get_by_role("link", name="wine-classifier"),
-            lambda pg: pg.get_by_text("champion").first,
+            lambda pg: pg.get_by_role("link", name="wine-classifier", exact=True),
+            lambda pg: pg.locator("tr, [role=row]").filter(has_text="wine-classifier").first.get_by_text("challenger"),
         ], avant=fermer_promotion)
         capturer(page, f"{MLFLOW}/#/models/wine-classifier/versions/{champion['version']}", "10-version-du-modele", [
             lambda pg: pg.get_by_text("Source Run"),
@@ -237,10 +269,53 @@ def main():
         capturer(page, f"{MLFLOW}/#/experiments/{evaluation}/runs/{run_candidat}/system-metrics",
                  "19-metriques-systeme", [lambda pg: pg.get_by_text("cpu_utilization_percentage").first])
 
+        capturer(page, f"{MLFLOW}/#/models/wine-classifier", "24-versions-et-alias", [
+            lambda pg: pg.get_by_text("champion").first,
+            lambda pg: pg.get_by_text("challenger").first,
+        ], avant=fermer_promotion)
+        capturer(page, f"{MLFLOW}/#/models/wine-classifier/versions/2", "25-version-refusee", [
+            lambda pg: pg.get_by_text("validation", exact=True).first,
+            lambda pg: pg.get_by_text("refuse", exact=True).first,
+        ], avant=fermer_promotion)
+        
+        recherche = ids["recherche-demo"]
+        capturer(page, f"{MLFLOW}/#/experiments/{recherche}/runs", "26-runs-imbriques", [
+            lambda pg: pg.get_by_role("link", name="recherche-logreg").first,
+        ], avant=deplier_parent)
+        
+        images = ids["images-demo"]
+        run_images = runs(images)[0]["info"]["run_id"]
+        page.set_viewport_size({"width": 1440, "height": 1000})
+        capturer(page, f"{MLFLOW}/#/experiments/{images}/runs/{run_images}/model-metrics", "27-images-par-etape",
+                 attente=6000, avant=agrandir_image)
+        page.set_viewport_size({"width": 1440, "height": 760})
+        capturer(page, f"{MLFLOW}/#/experiments/{images}/runs/{run_images}/artifacts/erreurs.json", "28-table-erreurs", [
+            lambda pg: pg.get_by_text("erreurs.json").first,
+        ])
+        run_xgboost = runs(ids["xgboost-demo"])[0]["info"]["run_id"]
+        capturer(page, f"{MLFLOW}/#/experiments/{ids['xgboost-demo']}/runs/{run_xgboost}/model-metrics",
+                 "29-courbe-xgboost", [lambda pg: pg.get_by_text("validation_0-mlogloss").first], attente=5000)
+        if "pytorch-demo" in ids:
+            run_torch = runs(ids["pytorch-demo"])[0]["info"]["run_id"]
+            page.set_viewport_size({"width": 1440, "height": 1000})
+            capturer(page, f"{MLFLOW}/#/experiments/{ids['pytorch-demo']}/runs/{run_torch}/model-metrics",
+                     "30-reseau-pytorch", attente=6000, avant=agrandir_image)
+            page.set_viewport_size({"width": 1440, "height": 760})
+        else:
+            print("pytorch-demo absente : capture 30 ignorée (lancer pytorch_example.py)")
+        
         if "genai-assistant" in ids:
             genai = ids["genai-assistant"]
+            page.goto("about:blank")
+            page.goto(MLFLOW)
+            page.wait_for_timeout(1500)
             page.get_by_text("GenAI", exact=True).click()
 
+            capturer(page, f"{MLFLOW}/#/prompts/assistant-wine-prompt", "31-registre-de-prompts", [
+                lambda pg: pg.get_by_text("production").first,
+                lambda pg: pg.get_by_text("{{fiche}}", exact=False).first,
+            ])
+            
             def fermer_decouverte(pg):
                 pg.get_by_role("button", name="Got it").click()
                 pg.wait_for_timeout(500)
