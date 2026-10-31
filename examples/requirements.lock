@@ -206,6 +206,7 @@ numpy==2.5.4
     #   scikit-learn
     #   scipy
     #   skops
+    #   xgboost-cpu
 openai==2.54.0
     # via
     #   -r requirements.txt
@@ -322,6 +323,7 @@ scipy==1.18.1
     #   mlflow
     #   scikit-learn
     #   skops
+    #   xgboost-cpu
 six==1.17.0
     # via python-dateutil
 skops==0.16.0
@@ -394,6 +396,8 @@ werkzeug==3.1.9
     # via
     #   flask
     #   flask-cors
+xgboost-cpu==3.4.1
+    # via -r requirements.txt
 yarl==1.25.1
     # via aiohttp
 zipp==4.1.2

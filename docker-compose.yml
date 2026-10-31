@@ -148,6 +148,34 @@ services:
     # version du modèle et ne déplace pas l'alias champion
   
   # -----------------------------------------
+  # Runner PyTorch - Le runner, plus PyTorch en version CPU
+  # Image séparée, car bien plus lourde. Démarre seulement à la demande :
+  # docker compose --profile deep up -d --build runner-torch
+  # -----------------------------------------
+  runner-torch:
+    profiles: [ "deep" ]
+    image: mlflow-test-bench-runner-torch
+    build:
+      context: ./examples
+      dockerfile: Dockerfile
+      target: torch
+    container_name: mlflow-runner-torch
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      GIT_PYTHON_REFRESH: quiet
+      MLFLOW_DISABLE_TELEMETRY: "true"
+      MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
+      AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
+      AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+    volumes:
+      - ./examples:/app
+    networks:
+      - mlflow-network
+  
+  # -----------------------------------------
   # Model Server - API de prédiction
   # Sert le modèle qui porte l'alias champion. Démarre seulement à la demande :
   # docker compose --profile serving up -d --wait model-server
@@ -172,6 +200,8 @@ services:
       MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
+      # Seulement pour servir l'assistant LLM de genai_example.py
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://localhost:11434/v1}
     # --env-manager local : les dépendances sont celles de l'image, verrouillées
     command:
       - mlflow
