@@ -39,6 +39,8 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 |---------|-------------------|---------|---------------|
 | `mlflow` | oui, sur `127.0.0.1` | 5000 | UI + API de tracking |
 | `seaweedfs` | oui, sur `127.0.0.1` | 8333 (API S3), 8888 (filer), 9333 (cluster) | Accès aux artefacts et interfaces web |
+| `model-server` | oui, sur `127.0.0.1`, s'il est démarré | 5001 | API de prédiction |
+| `runner-torch` | **non** | — | Exécution de scripts, aucun service à exposer |
 | `postgres` | **non** | 5432 (interne) | Accessible uniquement par `mlflow` via le réseau Docker |
 | `runner` | **non** | — | Exécution de scripts, aucun service à exposer |
 | `seaweedfs-setup` | **non** | — | Conteneur éphémère (init du bucket) |
@@ -46,8 +48,8 @@ Seuls les ports strictement nécessaires sont publiés sur l'hôte.
 Le backend PostgreSQL n'est donc **pas** joignable depuis la machine hôte, ce qui
 réduit la surface d'attaque.
 
-> **Attention** : l'UI MLflow (`:5000`) et les interfaces SeaweedFS (`:8888`, `:9333`)
-> n'ont aucune authentification, et rien n'est chiffré. L'API S3 (`:8333`) refuse les requêtes anonymes
+> **Attention** : l'UI MLflow (`:5000`), l'API de prédiction (`:5001`) et les interfaces
+> SeaweedFS (`:8888`, `:9333`) n'ont aucune authentification, et rien n'est chiffré. L'API S3 (`:8333`) refuse les requêtes anonymes
 > (403). Tous ces ports sont publiés seulement sur `127.0.0.1`. Acceptable en local ; à
 > placer derrière un reverse-proxy authentifié + HTTPS si exposé au réseau.
 
@@ -79,8 +81,11 @@ Les deux images construites appliquent des bonnes pratiques :
 
 Le serveur et les exemples installent les versions exactes de leur `requirements.lock`,
 généré par `uv pip compile` depuis `requirements.txt`. Un `pip-audit` de ces deux fichiers
-ne remonte aucune vulnérabilité connue au 30 octobre 2026. Pour y arriver, `filelock` est
+ne remonte aucune vulnérabilité connue au 31 octobre 2026. Pour y arriver, `filelock` est
 imposé en version >= 4.2.1, ce qui redescend LiteLLM à 1.103.10.
+
+`torch==2.14.0+cpu` vient de l'index de PyTorch : `pip-audit` ne peut pas l'auditer sous ce
+nom. Un audit de `torch==2.14.0`, la même version sur PyPI, ne remonte rien non plus.
 
 `chrislusf/seaweedfs:4.51` est épinglée sur une version précise ;
 `postgres:15-alpine` est figé sur une majeure mais suit les correctifs.
@@ -111,8 +116,12 @@ La persistance repose sur deux volumes Docker nommés :
 
 Charger un modèle peut exécuter du code contenu dans ses fichiers, quel que soit le format.
 `skops`, le format par défaut, bloque les types inconnus, mais sa liste de types de confiance
-est lue dans le modèle lui-même. L'autolog utilise toujours cloudpickle. Ne chargez que des
-modèles dont vous connaissez l'origine.
+est lue dans le modèle lui-même. L'autolog utilise toujours cloudpickle, et le modèle PyTorch
+de `pytorch_example.py` est lui aussi sérialisé en pickle. Un modèle maison (`pyfunc`) est du
+code exécuté au chargement. Ne chargez que des modèles dont vous connaissez l'origine.
+
+`model-server` détient les identifiants S3, pour télécharger le modèle : un modèle malveillant
+pourrait les lire. L'image autonome n'en contient aucun.
 
 ---
 
@@ -127,5 +136,9 @@ Honnêteté : ce projet est un tutoriel local, plusieurs points ne sont pas durc
   lire/modifier les expériences et le registry. Prévoir un proxy authentifié en prod.
 - **Identité unique** — MLflow et le `runner` partagent une même clé S3 avec les droits
   `Admin`. Déclarer des identités distinctes dans le fichier d'identités en prod.
+- **API de prédiction ouverte** — quiconque atteint `:5001` peut interroger le modèle, sans
+  limite de débit. Prévoir un proxy authentifié en prod.
+- **Image autonome en root** — le Dockerfile généré par MLflow ne définit pas d'utilisateur.
+  À durcir avant une livraison.
 - **Pas de TLS** — tout le trafic (UI, S3, Postgres) est en clair sur le réseau
   Docker et l'hôte.
