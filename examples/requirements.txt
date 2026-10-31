@@ -1,20 +1,32 @@
-# Dépendances pour les exemples MLflow
-# =====================================
+# Dépendances directes des exemples MLflow
+# ========================================
+# Versions exactes dans requirements.lock, installé par le Dockerfile. Pour
+# le régénérer après une modification :
+# uv pip compile --universal --python-version 3.12 requirements.txt -o requirements.lock
 
 # MLflow client
-mlflow==2.19.0
+mlflow==3.17.2
 
 # Machine Learning
-# <=1.5.2 : dernière version prise en charge par l'autolog de MLflow 2.19.0
-scikit-learn>=1.4.0,<=1.5.2
+# 1.6.0 à 1.9.1 : versions prises en charge par l'autolog de MLflow 3.17.2
+scikit-learn>=1.6.0,<=1.9.1
 pandas>=2.0.0
 numpy>=1.24.0
+
+# Mesures système pendant les runs (CPU, mémoire)
+psutil>=5.9.0
 
 # Visualisation
 matplotlib>=3.7.0
 
-# Connexion S3 (MinIO)
+# Connexion S3 (SeaweedFS)
 boto3>=1.28.0
+
+# Chapitre GenAI : client du LLM, et LiteLLM pour les juges de mlflow.genai
+openai>=1.0.0
+litellm>=1.0.0
+# Dépendance de LiteLLM : 4.2.1 corrige les failles des versions précédentes
+filelock>=4.2.1
 
 # Utilitaires
 python-dotenv>=1.0.0

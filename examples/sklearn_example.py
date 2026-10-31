@@ -33,13 +33,12 @@ import warnings
 import mlflow
 import mlflow.sklearn
 import mlflow.data
-from mlflow.data.pandas_dataset import PandasDataset
 from mlflow.tracking import MlflowClient
-import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from sklearn.datasets import load_wine
 from sklearn.model_selection import train_test_split, cross_val_score
+from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
@@ -57,6 +56,10 @@ from dotenv import load_dotenv
 
 # Suppression des warnings pour plus de clarté dans la sortie console
 warnings.filterwarnings('ignore')
+
+# skops, le format de sérialisation par défaut, refuse au chargement les types
+# qu'il ne connaît pas : le Random Forest contient des arbres de ce type-là
+TYPES_SKOPS_DE_CONFIANCE = ["sklearn.tree._tree.Tree"]
 
 # Chargement des variables d'environnement depuis le fichier .env
 # Cela permet de configurer les credentials sans les hardcoder
@@ -95,7 +98,7 @@ def configurer_mlflow():
     # --------------------------------------------------------------------
     # SeaweedFS est une alternative open-source à Amazon S3
     # MLflow utilise le protocole S3 pour stocker les fichiers volumineux :
-    # - Modèles sérialisés (.pkl, .joblib)
+    # - Modèles sérialisés (format skops par défaut depuis MLflow 3)
     # - Graphiques (.png, .jpg)
     # - Fichiers de données
     
@@ -122,21 +125,14 @@ def configurer_mlflow():
 
 def charger_donnees():
     """
-    Charge et prépare le dataset Wine de scikit-learn.
+    Charge le dataset Wine de scikit-learn et le divise en train et test.
     
     Le dataset Wine contient 178 échantillons de vins italiens avec :
     - 13 features (caractéristiques chimiques)
     - 3 classes (types de vins)
     
-    Étapes de préparation :
-    1. Chargement du dataset
-    2. Division train/test (80/20) avec stratification
-    3. Normalisation des features (StandardScaler)
-    
-    La normalisation est importante car :
-    - Les features ont des échelles différentes (ex: alcool vs magnésium)
-    - SVM et Logistic Regression sont sensibles à l'échelle
-    - Random Forest est robuste mais bénéficie quand même de la normalisation
+    Les données restent brutes : la normalisation fait partie du modèle
+    (voir creer_pipeline).
     
     Returns:
         tuple: (X_train, X_test, y_train, y_test, feature_names, target_names, df_train)
@@ -171,36 +167,45 @@ def charger_donnees():
     )
     
     # --------------------------------------------------------------------
-    # Étape 3 : Normalisation des features
-    # --------------------------------------------------------------------
-    # StandardScaler : transforme chaque feature pour avoir moyenne=0 et std=1
-    # fit_transform sur train : calcule les paramètres ET transforme
-    # transform sur test : utilise les paramètres du train (pas de data leakage)
-    scaler = StandardScaler()
-    X_train_scaled = scaler.fit_transform(X_train)
-    X_test_scaled = scaler.transform(X_test)
-    
-    # --------------------------------------------------------------------
     # Création d'un DataFrame pour le logging MLflow
     # --------------------------------------------------------------------
     # MLflow peut logger un DataFrame comme dataset d'entrée
     # Cela permet de tracer exactement quelles données ont été utilisées
-    df_train = pd.DataFrame(X_train_scaled, columns=feature_names)
+    df_train = pd.DataFrame(X_train, columns=feature_names)
     df_train['target'] = y_train
     df_train['target_name'] = [target_names[t] for t in y_train]
     
     # Affichage des informations sur le dataset
-    print(f"   📁 Échantillons d'entraînement: {len(X_train_scaled)}")
-    print(f"   📁 Échantillons de test: {len(X_test_scaled)}")
-    print(f"   📐 Nombre de features: {X_train_scaled.shape[1]}")
+    print(f"   📁 Échantillons d'entraînement: {len(X_train)}")
+    print(f"   📁 Échantillons de test: {len(X_test)}")
+    print(f"   📐 Nombre de features: {X_train.shape[1]}")
     print(f"   🏷️  Classes: {list(target_names)}")
     
-    return X_train_scaled, X_test_scaled, y_train, y_test, feature_names, target_names, df_train
+    return X_train, X_test, y_train, y_test, feature_names, target_names, df_train
 
 
 # ============================================================================
 # SECTION 3 : CRÉATION DES ARTEFACTS (GRAPHIQUES)
 # ============================================================================
+
+def creer_pipeline(estimateur):
+    """
+    Associe la normalisation à un estimateur dans un même modèle.
+    
+    - Les features ont des échelles différentes (ex: alcool vs magnésium),
+      et SVM et Logistic Regression y sont sensibles
+    - Le StandardScaler est ajusté dans chaque fold de la validation croisée,
+      donc sans voir les données de validation
+    - Le modèle enregistré accepte directement des données brutes
+    
+    Args:
+        estimateur: Instance du modèle sklearn (non entraîné)
+    
+    Returns:
+        sklearn.pipeline.Pipeline: Normalisation puis estimateur
+    """
+    return Pipeline([("scaler", StandardScaler()), ("modele", estimateur)])
+
 
 def creer_graphique_confusion(y_true, y_pred, target_names, nom_modele):
     """
@@ -293,7 +298,7 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
     
     Args:
         nom_modele: Nom descriptif du modèle (ex: "Random Forest")
-        modele: Instance du modèle sklearn (non entraîné)
+        modele: Pipeline sklearn (non entraîné), voir creer_pipeline
         X_train, X_test, y_train, y_test: Données train/test
         target_names: Noms des classes
         feature_names: Noms des features
@@ -301,7 +306,7 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         model_index: Index numérique du modèle (pour faciliter la comparaison)
     
     Returns:
-        dict: Dictionnaire des métriques calculées
+        tuple: (metriques, model_uri), l'URI du modèle servant au Model Registry
     """
     # ========================================================================
     # DÉMARRAGE D'UN RUN MLFLOW
@@ -373,16 +378,17 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         # ====================================================================
         # ÉTAPE 4 : LOGGING DES PARAMÈTRES
         # ====================================================================
-        # MODIFICATION UTILISATEUR :
-        # On ne log plus automatiquement tous les paramètres (modele.get_params())
-        # pour éviter de polluer l'interface avec des valeurs par défaut.
+        # Les hyperparamètres de l'estimateur : sans eux, deux runs comme
+        # "Random Forest" et "Random Forest Large" ne se distinguent pas
+        estimateur = modele.named_steps["modele"]
+        mlflow.log_params(estimateur.get_params())
         
         # On log explicitement le nom du run comme paramètre pour qu'il soit
         # sélectionnable dans les axes des graphiques de comparaison.
         mlflow.log_param("run_name", nom_modele)
         
         # On peut aussi logger le type de modèle
-        mlflow.log_param("model_type", type(modele).__name__)
+        mlflow.log_param("model_type", type(estimateur).__name__)
         
         # Paramètre supplémentaire : index du modèle
         # Utile pour la comparaison dans les graphiques MLflow
@@ -413,19 +419,18 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         # ====================================================================
         # ÉTAPE 7 : SAUVEGARDE DU MODÈLE
         # ====================================================================
-        # mlflow.sklearn.log_model() sérialise le modèle entraîné
-        # 
-        # artifact_path : dossier dans les artefacts du run
-        # Le modèle peut ensuite être chargé avec mlflow.sklearn.load_model()
-        # 
-        # Note : registered_model_name=None car on enregistrera le meilleur
-        # modèle plus tard dans le Model Registry
+        # mlflow.sklearn.log_model() sérialise le modèle entraîné et crée un
+        # Logged Model, un objet à part entière relié au run
+        #
+        # name : nom du Logged Model
+        # model_uri (models:/<model_id>) permet ensuite de le charger ou de
+        # l'enregistrer dans le Model Registry
         
-        mlflow.sklearn.log_model(
-            modele, 
-            artifact_path="model",
-            registered_model_name=None,
-            input_example=X_train[:5]  # Exemple pour inférer la signature
+        model_info = mlflow.sklearn.log_model(
+            modele,
+            name="model",
+            input_example=X_train[:5],  # Exemple pour inférer la signature
+            skops_trusted_types=TYPES_SKOPS_DE_CONFIANCE
         )
         
         # ====================================================================
@@ -459,10 +464,7 @@ def entrainer_modele(nom_modele, modele, X_train, X_test, y_train, y_test,
         print(f"   ✅ F1-Score: {metriques['f1_score']:.4f}")
         print(f"   ✅ CV Score: {metriques['cv_mean']:.4f} (±{metriques['cv_std']:.4f})")
         
-        # Récupération de l'ID du run pour le Model Registry
-        run_id = mlflow.active_run().info.run_id
-        
-        return metriques, run_id
+        return metriques, model_info.model_uri
 
 
 # ============================================================================
@@ -502,38 +504,38 @@ def comparer_modeles():
     # ========================================================================
     # Chaque entrée contient :
     # - Clé : nom descriptif du modèle
-    # - Valeur : instance du modèle sklearn avec ses hyperparamètres
+    # - Valeur : pipeline (normalisation + modèle avec ses hyperparamètres)
     # 
     # random_state=42 : garantit la reproductibilité des résultats
     
     modeles = {
-        "Random Forest": RandomForestClassifier(
+        "Random Forest": creer_pipeline(RandomForestClassifier(
             n_estimators=100,      # Nombre d'arbres dans la forêt
             max_depth=5,           # Profondeur maximale de chaque arbre
             random_state=42
-        ),
-        "Logistic Regression": LogisticRegression(
+        )),
+        "Logistic Regression": creer_pipeline(LogisticRegression(
             max_iter=1000,         # Nombre max d'itérations pour converger
             random_state=42
-        ),
-        "SVM RBF": SVC(
+        )),
+        "SVM RBF": creer_pipeline(SVC(
             kernel='rbf',          # Kernel gaussien (RBF)
             C=1.0,                 # Paramètre de régularisation
             random_state=42
-        ),
-        "Random Forest Large": RandomForestClassifier(
+        )),
+        "Random Forest Large": creer_pipeline(RandomForestClassifier(
             n_estimators=200,      # Plus d'arbres
             max_depth=10,          # Arbres plus profonds
             min_samples_split=5,   # Min échantillons pour diviser un noeud
             random_state=42
-        )
+        ))
     }
     
     # ========================================================================
     # ENTRAÎNEMENT ET COMPARAISON
     # ========================================================================
     resultats = {}
-    run_ids = {}
+    model_uris = {}
     
     print("\n" + "=" * 60)
     print("   📊 Comparaison des modèles")
@@ -541,14 +543,14 @@ def comparer_modeles():
     
     # Entraînement de chaque modèle avec un index pour la comparaison
     for index, (nom, modele) in enumerate(modeles.items(), start=1):
-        metriques, run_id = entrainer_modele(
+        metriques, model_uri = entrainer_modele(
             nom, modele, 
             X_train, X_test, y_train, y_test, 
             target_names, feature_names, df_train,
             model_index=index  # Index numérique pour les graphiques de comparaison
         )
         resultats[nom] = metriques
-        run_ids[nom] = run_id
+        model_uris[nom] = model_uri
     
     # ========================================================================
     # RÉSUMÉ DES RÉSULTATS
@@ -559,21 +561,25 @@ def comparer_modeles():
     
     # Création d'un DataFrame pour un affichage propre
     df_resultats = pd.DataFrame(resultats).T
-    df_resultats = df_resultats.sort_values("test_accuracy", ascending=False)
+    
+    # Classement sur la validation croisée, à score égal le plus stable d'abord
+    # Le jeu de test ne sert pas à choisir : il reste une estimation indépendante
+    df_resultats = df_resultats.sort_values(["cv_mean", "cv_std"], ascending=[False, True])
     
     print("\n" + df_resultats[["test_accuracy", "f1_score", "cv_mean"]].to_string())
     
     # Identification du meilleur modèle
     meilleur_nom = df_resultats.index[0]
-    meilleur_run_id = run_ids[meilleur_nom]
+    meilleur_model_uri = model_uris[meilleur_nom]
     
     print(f"\n🏆 Meilleur modèle: {meilleur_nom}")
-    print(f"   Accuracy: {df_resultats.loc[meilleur_nom, 'test_accuracy']:.4f}")
+    print(f"   CV Score: {df_resultats.loc[meilleur_nom, 'cv_mean']:.4f}")
+    print(f"   Accuracy (test): {df_resultats.loc[meilleur_nom, 'test_accuracy']:.4f}")
     
     # ========================================================================
     # ENREGISTREMENT DANS LE MODEL REGISTRY
     # ========================================================================
-    enregistrer_meilleur_modele(meilleur_run_id, meilleur_nom)
+    enregistrer_meilleur_modele(meilleur_model_uri, meilleur_nom)
     
     return resultats, X_test, y_test, target_names
 
@@ -582,7 +588,7 @@ def comparer_modeles():
 # SECTION 6 : MODEL REGISTRY (MISE EN PRODUCTION)
 # ============================================================================
 
-def enregistrer_meilleur_modele(run_id, nom_modele):
+def enregistrer_meilleur_modele(model_uri, nom_modele):
     """
     Enregistre le meilleur modèle dans le Model Registry de MLflow.
     
@@ -607,7 +613,7 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
        - models:/nom-modele/1 : charge une version spécifique
     
     Args:
-        run_id: ID du run contenant le modèle à enregistrer
+        model_uri: URI du Logged Model à enregistrer (models:/<model_id>)
         nom_modele: Nom du modèle (pour la description)
     
     Returns:
@@ -620,67 +626,57 @@ def enregistrer_meilleur_modele(run_id, nom_modele):
     # Client MLflow pour les opérations avancées
     client = MlflowClient()
     
-    # URI du modèle dans les artefacts du run
-    # Format : runs:/<run_id>/<artifact_path>
-    model_uri = f"runs:/{run_id}/model"
-    
     # Nom du modèle dans le Registry
     # Ce nom doit être unique et descriptif
     registry_name = "wine-classifier"
     
-    try:
-        # ====================================================================
-        # ENREGISTREMENT DU MODÈLE
-        # ====================================================================
-        # register_model() :
-        # - Crée le modèle dans le Registry s'il n'existe pas
-        # - Ajoute une nouvelle version si le modèle existe
-        
-        print(f"   📦 Enregistrement du modèle: {registry_name}")
-        model_version = mlflow.register_model(
-            model_uri=model_uri,
-            name=registry_name
-        )
-        
-        print(f"   ✅ Version créée: {model_version.version}")
-        
-        # ====================================================================
-        # AJOUT D'UNE DESCRIPTION
-        # ====================================================================
-        # La description aide à documenter le modèle pour les autres utilisateurs
-        
-        client.update_model_version(
-            name=registry_name,
-            version=model_version.version,
-            description=f"Modèle {nom_modele} entraîné sur le dataset Wine. "
-                        f"Meilleur modèle de l'expérience de comparaison."
-        )
-        
-        # ====================================================================
-        # ATTRIBUTION DE L'ALIAS "CHAMPION"
-        # ====================================================================
-        # set_registered_model_alias() pose l'alias sur cette version
-        # 
-        # Un alias ne désigne qu'une seule version à la fois : il quitte
-        # automatiquement la version précédente, qui reste disponible
-        
-        print(f"   🚀 Attribution de l'alias 'champion'...")
-        client.set_registered_model_alias(
-            name=registry_name,
-            alias="champion",
-            version=model_version.version
-        )
-        
-        print(f"   ✅ Modèle '{registry_name}' v{model_version.version} désormais @champion!")
-        print(f"\n   💡 Pour charger ce modèle:")
-        print(f"      model = mlflow.sklearn.load_model('models:/{registry_name}@champion')")
-        
-        return model_version
-        
-    except Exception as e:
-        print(f"   ⚠️  Erreur lors de l'enregistrement: {e}")
-        print("   Note: Le Model Registry nécessite que le serveur MLflow soit accessible.")
-        return None
+    # ========================================================================
+    # ENREGISTREMENT DU MODÈLE
+    # ========================================================================
+    # register_model() :
+    # - Crée le modèle dans le Registry s'il n'existe pas
+    # - Ajoute une nouvelle version si le modèle existe
+    
+    print(f"   📦 Enregistrement du modèle: {registry_name}")
+    model_version = mlflow.register_model(
+        model_uri=model_uri,
+        name=registry_name
+    )
+    
+    print(f"   ✅ Version créée: {model_version.version}")
+    
+    # ========================================================================
+    # AJOUT D'UNE DESCRIPTION
+    # ========================================================================
+    # La description aide à documenter le modèle pour les autres utilisateurs
+    
+    client.update_model_version(
+        name=registry_name,
+        version=model_version.version,
+        description=f"Modèle {nom_modele} entraîné sur le dataset Wine. "
+                    f"Meilleur modèle de l'expérience de comparaison."
+    )
+    
+    # ========================================================================
+    # ATTRIBUTION DE L'ALIAS "CHAMPION"
+    # ========================================================================
+    # set_registered_model_alias() pose l'alias sur cette version
+    #
+    # Un alias ne désigne qu'une seule version à la fois : il quitte
+    # automatiquement la version précédente, qui reste disponible
+    
+    print("   🚀 Attribution de l'alias 'champion'...")
+    client.set_registered_model_alias(
+        name=registry_name,
+        alias="champion",
+        version=model_version.version
+    )
+    
+    print(f"   ✅ Modèle '{registry_name}' v{model_version.version} désormais @champion!")
+    print("\n   💡 Pour charger ce modèle:")
+    print(f"      model = mlflow.sklearn.load_model('models:/{registry_name}@champion')")
+    
+    return model_version
 
 
 # ============================================================================
@@ -692,12 +688,12 @@ def demo_chargement_modele(X_test, y_test, target_names):
     Démontre comment charger un modèle depuis le Model Registry.
     
     Cette fonction montre les différentes façons de charger un modèle :
-    1. Depuis un run spécifique : runs:/<run_id>/model
+    1. Depuis un Logged Model : models:/<model_id>
     2. Depuis le Registry par version : models:/<name>/<version>
     3. Depuis le Registry par alias : models:/<name>@<alias>
     
     Args:
-        X_test: Features de test, déjà normalisées comme à l'entraînement
+        X_test: Features de test, brutes : le modèle les normalise lui-même
         y_test: Labels réels
         target_names: Noms des classes
     """
@@ -707,26 +703,19 @@ def demo_chargement_modele(X_test, y_test, target_names):
     
     registry_name = "wine-classifier"
     
-    try:
-        # Chargement de la version portant l'alias "champion"
-        model_uri = f"models:/{registry_name}@champion"
-        print(f"   🔄 Chargement depuis: {model_uri}")
-        
-        model = mlflow.sklearn.load_model(model_uri)
-        print(f"   ✅ Modèle chargé: {type(model).__name__}")
-        
-        # Test de prédiction
-        # Le modèle attend des données normalisées : le StandardScaler n'est pas
-        # enregistré avec lui, on utilise donc X_test et non les données brutes
-        predictions = model.predict(X_test[:5])
-        
-        print(f"   🎯 Prédictions sur 5 échantillons: {predictions}")
-        print(f"   📝 Classes prédites: {[str(target_names[p]) for p in predictions]}")
-        print(f"   📝 Classes réelles:  {[str(target_names[t]) for t in y_test[:5]]}")
-        
-    except Exception as e:
-        print(f"   ⚠️  Le modèle n'est pas encore enregistré: {e}")
-        print("   Exécutez d'abord la comparaison des modèles.")
+    # Chargement de la version portant l'alias "champion"
+    model_uri = f"models:/{registry_name}@champion"
+    print(f"   🔄 Chargement depuis: {model_uri}")
+    
+    model = mlflow.sklearn.load_model(model_uri)
+    print(f"   ✅ Modèle chargé: {type(model).__name__}")
+    
+    # Test de prédiction sur des données brutes : le pipeline les normalise
+    predictions = model.predict(X_test[:5])
+    
+    print(f"   🎯 Prédictions sur 5 échantillons: {predictions}")
+    print(f"   📝 Classes prédites: {[str(target_names[p]) for p in predictions]}")
+    print(f"   📝 Classes réelles:  {[str(target_names[t]) for t in y_test[:5]]}")
 
 
 # ============================================================================
@@ -769,7 +758,8 @@ def main():
     print("      2. Cliquez sur un run → Overview : voir le dataset loggé")
     print("      3. Cliquez sur un run → Artifacts : matrice de confusion et rapport")
     print("      4. Sélectionnez plusieurs runs → Compare : graphiques de comparaison")
-    print("      5. Menu 'Models' : voir le Model Registry")
+    print("      5. Onglet 'Models' de l'expérience : voir les Logged Models")
+    print("      6. Menu 'Model registry' : voir le modèle enregistré")
     print("\n   💡 Astuce pour la comparaison:")
     print("      Utilisez 'model_index' comme paramètre sur l'axe X")
     print("      pour différencier les modèles dans les graphiques.")

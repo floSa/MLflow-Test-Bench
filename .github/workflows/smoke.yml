@@ -17,19 +17,13 @@ jobs:
           cp .env.example .env
           docker compose up -d --build
 
-      - name: Attendre le modèle champion (entraînement lancé par le runner)
+      - name: Lancer les exemples
         run: |
-          for i in $(seq 1 60); do
-            curl -sf "http://localhost:5000/api/2.0/mlflow/registered-models/alias?name=wine-classifier&alias=champion" && exit 0
-            sleep 5
-          done
-          exit 1
-
-      - name: Lancer les autres exemples
-        run: |
+          docker compose exec -T runner python sklearn_example.py
           docker compose exec -T runner python basic_example.py
           docker compose exec -T runner python autolog_example.py
           docker compose exec -T runner python dataset_example.py
+          docker compose exec -T runner python evaluation_example.py
 
       - name: Vérifier la lecture d'un artefact par le serveur
         run: |

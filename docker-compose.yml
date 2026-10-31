@@ -35,7 +35,7 @@ services:
   # Ports publiés sur la boucle locale : les interfaces web n'ont pas d'auth
   # -----------------------------------------
   seaweedfs:
-    image: chrislusf/seaweedfs:3.80
+    image: chrislusf/seaweedfs:4.51
     container_name: mlflow-seaweedfs
     hostname: seaweedfs
     restart: unless-stopped
@@ -96,7 +96,7 @@ services:
   # SeaweedFS Setup - Création automatique du bucket
   # -----------------------------------------
   seaweedfs-setup:
-    image: chrislusf/seaweedfs:3.80
+    image: chrislusf/seaweedfs:4.51
     container_name: mlflow-seaweedfs-setup
     depends_on:
       seaweedfs:
@@ -125,6 +125,10 @@ services:
     environment:
       # Configuration MLflow (accès via le réseau Docker)
       MLFLOW_TRACKING_URI: http://mlflow:5000
+      # L'image ne contient pas git : évite l'avertissement de GitPython
+      GIT_PYTHON_REFRESH: quiet
+      # MLflow 3 envoie par défaut des statistiques d'usage à ses serveurs
+      MLFLOW_DISABLE_TELEMETRY: "true"
       # Configuration S3 pour SeaweedFS (artefacts)
       MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
@@ -138,8 +142,9 @@ services:
     # Garde le conteneur actif pour exécution interactive
     stdin_open: true
     tty: true
-    # Lancer le script d'exemple au démarrage puis attendre
-    command: sh -c "python sklearn_example.py && tail -f /dev/null"
+    # Le conteneur attend (CMD du Dockerfile) : les scripts se lancent avec
+    # docker compose exec, jamais au démarrage, pour qu'un up ne crée pas de
+    # version du modèle et ne déplace pas l'alias champion
 
   # -----------------------------------------
   # MLflow Tracking Server
@@ -158,14 +163,23 @@ services:
         condition: service_completed_successfully
     environment:
       # Configuration du backend store (PostgreSQL)
-      MLFLOW_BACKEND_STORE_URI: postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
+      MLFLOW_BACKEND_STORE_URI: postgresql+psycopg://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}
       # Configuration de l'artifact store (SeaweedFS/S3)
       MLFLOW_S3_ENDPOINT_URL: http://seaweedfs:8333
       AWS_ACCESS_KEY_ID: ${S3_ACCESS_KEY}
       AWS_SECRET_ACCESS_KEY: ${S3_SECRET_KEY}
       MLFLOW_ARTIFACT_ROOT: s3://${S3_BUCKET}/
+      # Depuis MLflow 3.5, le serveur refuse les en-têtes Host inconnus :
+      # mlflow:5000 est l'adresse utilisée par le runner, sur le réseau Docker
+      MLFLOW_SERVER_ALLOWED_HOSTS: mlflow:5000,localhost:*,127.0.0.1:*
+      # Exécuteur de tâches du serveur (évaluation en ligne des traces) : plus
+      # de 1 Gio de RAM pour une fonction que le tutoriel n'utilise pas
+      MLFLOW_SERVER_ENABLE_JOB_EXECUTION: "false"
+      # MLflow 3 envoie par défaut des statistiques d'usage à ses serveurs
+      MLFLOW_DISABLE_TELEMETRY: "true"
+    # Boucle locale : le serveur MLflow n'a pas d'authentification
     ports:
-      - "5000:5000"
+      - "127.0.0.1:5000:5000"
     networks:
       - mlflow-network
     healthcheck:
