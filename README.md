@@ -16,8 +16,6 @@ Ce projet fournit :
 - Un **tutoriel complet** en français pour apprendre MLflow ([TUTORIAL.md](TUTORIAL.md)), du suivi des essais jusqu'au modèle servi par une API
 - Des **exemples de code** exécutés en CI, avec les bonnes pratiques : scikit-learn, XGBoost, PyTorch, modèle maison et assistant LLM
 
-![Table des runs dans l'interface MLflow](documentation/images/01-table-des-runs.png)
-
 ## Sommaire
 
 - [Architecture](#architecture)
